@@ -1,3 +1,4 @@
+
 """
 Final connectivity prediction model for Smart Connectivity Analyser.
 
@@ -48,13 +49,26 @@ class FinalConnectivityPredictor:
         connection.row_factory = sqlite3.Row
 
         try:
-            rows = connection.execute(
-                f"""
-                SELECT {", ".join(FEATURES)}
-                FROM network_tests
-                ORDER BY timestamp ASC
-                """
-            ).fetchall()
+            try:
+                rows = connection.execute(
+                    f"""
+                    SELECT {", ".join(FEATURES)}
+                    FROM network_tests
+                    ORDER BY timestamp ASC
+                    """
+                ).fetchall()
+
+            except sqlite3.OperationalError as error:
+                if (
+                    "no such table" in str(error).lower()
+                    or "no such column" in str(error).lower()
+                ):
+                    return np.empty(
+                        (0, len(FEATURES)),
+                        dtype=float,
+                    )
+                raise
+
         finally:
             connection.close()
 
@@ -76,7 +90,10 @@ class FinalConnectivityPredictor:
 
             data.append(values)
 
-        return np.asarray(data, dtype=float)
+        return np.asarray(data, dtype=float).reshape(
+            -1,
+            len(FEATURES),
+        )
 
     def _build_dataset(self, data):
         score_index = FEATURES.index("connectivity_score")
@@ -102,6 +119,8 @@ class FinalConnectivityPredictor:
         self.record_count = len(data)
 
         if len(data) <= SEQUENCE_LENGTH:
+            self.model = None
+            self.training_samples = 0
             self.ready = False
             self.message = (
                 f"Need at least {SEQUENCE_LENGTH + 1} "
@@ -123,7 +142,9 @@ class FinalConnectivityPredictor:
 
         self.training_samples = len(X)
         self.ready = True
-        self.message = "HistGradientBoosting model trained successfully."
+        self.message = (
+            "HistGradientBoosting model trained successfully."
+        )
 
         return True
 
@@ -135,7 +156,8 @@ class FinalConnectivityPredictor:
 
         if len(data) < SEQUENCE_LENGTH:
             raise RuntimeError(
-                f"At least {SEQUENCE_LENGTH} complete records are required."
+                f"At least {SEQUENCE_LENGTH} complete records "
+                "are required."
             )
 
         latest_window = data[-SEQUENCE_LENGTH:]
