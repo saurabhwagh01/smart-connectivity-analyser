@@ -222,12 +222,6 @@ def load_ai_models():
         return False, f"AI model loading failed: {error}"
 
 
-AI_MODELS_READY, AI_MODELS_MESSAGE = load_ai_models()
-
-
-
-
-
 
 # ============================================================
 
@@ -333,7 +327,7 @@ def initialize_database():
 
 initialize_database()
 from backend.final_predictor import final_predictor, FINAL_PREDICTOR_READY
-
+AI_MODELS_READY, AI_MODELS_MESSAGE = load_ai_models()
 
 
 
