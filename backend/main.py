@@ -19,7 +19,6 @@ import subprocess
 import re
 
 import statistics
-from backend.final_predictor import final_predictor, FINAL_PREDICTOR_READY
 from datetime import datetime, timedelta
 
 # ============================================================
@@ -333,6 +332,7 @@ def initialize_database():
 
 
 initialize_database()
+from backend.final_predictor import final_predictor, FINAL_PREDICTOR_READY
 
 
 
