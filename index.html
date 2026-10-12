@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+
+    <meta name="description"
+        content="Smart Internet Connectivity Analyser">
+
+    <title>Smart Connectivity Analyser</title>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Leaflet Map -->
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <script
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+    </script>
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+
+<body>
+
+    <!-- =====================================================
+         NAVIGATION
+    ====================================================== -->
+
+    <header class="topbar">
+
+        <div class="brand">
+
+            <div class="brand-icon">
+                📡
+            </div>
+
+            <div>
+                <h1>Smart Connectivity</h1>
+                <span>Internet Analyser</span>
+            </div>
+
+        </div>
+
+
+        <nav class="nav-links">
+
+            <a href="#dashboard">
+                Dashboard
+            </a>
+
+            <a href="#history">
+                History
+            </a>
+
+            <a href="#applications">
+                Applications
+            </a>
+
+            <a href="#location">
+                Location
+            </a>
+
+        </nav>
+
+
+        <button
+            id="menuButton"
+            class="menu-button"
+        >
+            ☰
+        </button>
+
+    </header>
+
+
+    <!-- =====================================================
+         MAIN
+    ====================================================== -->
+
+    <main class="container">
+
+
+        <!-- =================================================
+             HERO
+        ================================================== -->
+
+        <section
+            id="dashboard"
+            class="hero-section"
+        >
+
+            <div class="hero-content">
+
+                <span class="badge">
+                    AI-POWERED NETWORK ANALYSIS
+                </span>
+
+                <h2>
+                    Your Internet,
+                    <span>intelligently analysed.</span>
+                </h2>
+
+                <p>
+                    Monitor network quality, analyse connectivity,
+                    detect problems and understand your Internet
+                    performance in real time.
+                </p>
+
+
+                <button
+                    id="startTest"
+                    class="primary-button"
+                >
+                    ▶ Start Network Test
+                </button>
+
+                <p
+                    id="testMessage"
+                    class="test-message"
+                >
+                    Ready to test your connection.
+                </p>
+
+            </div>
+
+
+            <!-- Connectivity Score -->
+
+            <div class="score-card">
+
+                <div class="score-header">
+
+                    <span>
+                        Connectivity Score
+                    </span>
+
+                    <span
+                        id="networkStatusDot"
+                        class="status-dot"
+                    ></span>
+
+                </div>
+
+
+                <div
+                    id="score"
+                    class="score-number"
+                >
+                    0
+                </div>
+
+
+                <div class="score-out-of">
+                    /100
+                </div>
+
+
+                <div
+                    id="status"
+                    class="quality-text"
+                >
+                    Not Connected
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =================================================
+             NETWORK METRICS
+        ================================================== -->
+
+        <section class="metrics-grid">
+
+
+            <!-- Download -->
+
+            <div class="metric-card">
+
+                <div class="metric-icon">
+                    ↓
+                </div>
+
+                <div>
+
+                    <span>
+                        Download
+                    </span>
+
+                    <strong id="download">
+                        0 Mbps
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <!-- Upload -->
+
+            <div class="metric-card">
+
+                <div class="metric-icon">
+                    ↑
+                </div>
+
+                <div>
+
+                    <span>
+                        Upload
+                    </span>
+
+                    <strong id="upload">
+                        0 Mbps
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <!-- Ping -->
+
+            <div class="metric-card">
+
+                <div class="metric-icon">
+                    ◉
+                </div>
+
+                <div>
+
+                    <span>
+                        Ping
+                    </span>
+
+                    <strong id="ping">
+                        0 ms
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <!-- Jitter -->
+
+            <div class="metric-card">
+
+                <div class="metric-icon">
+                    ≋
+                </div>
+
+                <div>
+
+                    <span>
+                        Jitter
+                    </span>
+
+                    <strong id="jitter">
+                        0 ms
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <!-- Packet Loss -->
+
+            <div class="metric-card">
+
+                <div class="metric-icon">
+                    %
+                </div>
+
+                <div>
+
+                    <span>
+                        Packet Loss
+                    </span>
+
+                    <strong id="packetLoss">
+                        0%
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <!-- Network Type -->
+
+            <div class="metric-card">
+
+                <div class="metric-icon">
+                    📶
+                </div>
+
+                <div>
+
+                    <span>
+                        Network Type
+                    </span>
+
+                    <strong id="networkType">
+                        Checking...
+                    </strong>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =================================================
+             HISTORY + SESSION
+        ================================================== -->
+
+        <section
+            id="history"
+            class="two-column"
+        >
+
+
+            <!-- Network History -->
+
+            <div class="panel chart-panel">
+
+                <div class="panel-header">
+
+                    <div>
+
+                        <span class="section-label">
+                            PERFORMANCE
+                        </span>
+
+                        <h2>
+                            Network History
+                        </h2>
+
+                    </div>
+
+
+                    <select id="historyRange">
+
+                        <option value="10">
+                            Recent
+                        </option>
+
+                        <option value="20">
+                            Extended
+                        </option>
+
+                    </select>
+
+                </div>
+
+
+                <div class="chart-container">
+
+                    <canvas
+                        id="networkChart">
+                    </canvas>
+
+                </div>
+
+            </div>
+
+
+
+            <!-- Session Statistics -->
+
+            <div class="panel">
+
+                <div class="panel-header">
+
+                    <div>
+
+                        <span class="section-label">
+                            SESSION
+                        </span>
+
+                        <h2>
+                            Session Statistics
+                        </h2>
+
+                    </div>
+
+                </div>
+
+
+                <div class="statistics-list">
+
+
+                    <div class="stat-row">
+
+                        <span>
+                            Session Duration
+                        </span>
+
+                        <strong id="sessionTime">
+                            00:00:00
+                        </strong>
+
+                    </div>
+
+
+                    <div class="stat-row">
+
+                        <span>
+                            Average Speed
+                        </span>
+
+                        <strong id="averageSpeed">
+                            0 Mbps
+                        </strong>
+
+                    </div>
+
+
+                    <div class="stat-row">
+
+                        <span>
+                            Average Ping
+                        </span>
+
+                        <strong id="averagePing">
+                            0 ms
+                        </strong>
+
+                    </div>
+
+
+                    <div class="stat-row">
+
+                        <span>
+                            Peak Speed
+                        </span>
+
+                        <strong id="peakSpeed">
+                            0 Mbps
+                        </strong>
+
+                    </div>
+
+
+                    <div class="stat-row">
+
+                        <span>
+                            Downtime
+                        </span>
+
+                        <strong id="downtime">
+                            0 min
+                        </strong>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =================================================
+             AI FEATURES
+        ================================================== -->
+
+        <section class="ai-grid">
+
+
+            <!-- Prediction -->
+
+            <div class="ai-card prediction-card">
+
+                <div class="ai-icon">
+                    🧠
+                </div>
+
+                <div>
+
+                    <span class="section-label">
+                        AI PREDICTION
+                    </span>
+
+                    <h2>
+                        Future Connectivity
+                    </h2>
+
+                    <p
+                        id="predictionResult"
+                        class="ai-result"
+                    >
+                        Waiting for network data
+                    </p>
+
+                    <small>
+                        Model: Transformer + TCN
+                    </small>
+
+                </div>
+
+            </div>
+
+
+            <!-- Anomaly -->
+
+            <div class="ai-card anomaly-card">
+
+                <div class="ai-icon">
+                    🔍
+                </div>
+
+                <div>
+
+                    <span class="section-label">
+                        AI MONITOR
+                    </span>
+
+                    <h2>
+                        Anomaly Detection
+                    </h2>
+
+                    <p
+                        id="anomalyResult"
+                        class="ai-result"
+                    >
+                        Waiting for network data
+                    </p>
+
+                    <small>
+                        Model: Transformer Autoencoder
+                    </small>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =================================================
+             APPLICATION READINESS
+        ================================================== -->
+
+        <section
+            id="applications"
+            class="section"
+        >
+
+            <div class="section-heading">
+
+                <span class="section-label">
+                    APPLICATION EXPERIENCE
+                </span>
+
+                <h2>
+                    Application Readiness
+                </h2>
+
+                <p>
+                    Estimated suitability based on current
+                    network conditions.
+                </p>
+
+            </div>
+
+
+            <div class="application-grid">
+
+
+                <!-- Gaming -->
+
+                <div class="application-card">
+
+                    <div class="application-top">
+
+                        <span class="application-icon">
+                            🎮
+                        </span>
+
+                        <span
+                            id="gamingScore"
+                            class="application-score"
+                        >
+                            0%
+                        </span>
+
+                    </div>
+
+                    <h3>
+                        Gaming
+                    </h3>
+
+                    <div class="progress-bar">
+
+                        <div
+                            id="gamingProgress"
+                            class="progress-fill"
+                        ></div>
+
+                    </div>
+
+                    <p>
+                        Latency, jitter and packet loss.
+                    </p>
+
+                </div>
+
+
+
+                <!-- Video Call -->
+
+                <div class="application-card">
+
+                    <div class="application-top">
+
+                        <span class="application-icon">
+                            📹
+                        </span>
+
+                        <span
+                            id="videoCallScore"
+                            class="application-score"
+                        >
+                            0%
+                        </span>
+
+                    </div>
+
+                    <h3>
+                        Video Call
+                    </h3>
+
+                    <div class="progress-bar">
+
+                        <div
+                            id="videoCallProgress"
+                            class="progress-fill"
+                        ></div>
+
+                    </div>
+
+                    <p>
+                        Upload speed and connection stability.
+                    </p>
+
+                </div>
+
+
+
+                <!-- Streaming -->
+
+                <div class="application-card">
+
+                    <div class="application-top">
+
+                        <span class="application-icon">
+                            🎬
+                        </span>
+
+                        <span
+                            id="streamingScore"
+                            class="application-score"
+                        >
+                            0%
+                        </span>
+
+                    </div>
+
+                    <h3>
+                        Streaming
+                    </h3>
+
+                    <div class="progress-bar">
+
+                        <div
+                            id="streamingProgress"
+                            class="progress-fill"
+                        ></div>
+
+                    </div>
+
+                    <p>
+                        Download speed and packet loss.
+                    </p>
+
+                </div>
+
+
+
+                <!-- Browsing -->
+
+                <div class="application-card">
+
+                    <div class="application-top">
+
+                        <span class="application-icon">
+                            🌐
+                        </span>
+
+                        <span
+                            id="browsingScore"
+                            class="application-score"
+                        >
+                            0%
+                        </span>
+
+                    </div>
+
+                    <h3>
+                        Browsing
+                    </h3>
+
+                    <div class="progress-bar">
+
+                        <div
+                            id="browsingProgress"
+                            class="progress-fill"
+                        ></div>
+
+                    </div>
+
+                    <p>
+                        Speed, latency and packet loss.
+                    </p>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =================================================
+             SMART DIAGNOSIS
+        ================================================== -->
+
+        <section class="diagnosis-section">
+
+            <div class="diagnosis-card">
+
+                <div class="diagnosis-icon">
+                    💡
+                </div>
+
+                <div>
+
+                    <span class="section-label">
+                        SMART DIAGNOSIS
+                    </span>
+
+                    <h2>
+                        Network Recommendation
+                    </h2>
+
+                    <p id="recommendation">
+                        Connect to the Internet to begin
+                        network analysis.
+                    </p>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- =================================================
+             LOCATION
+        ================================================== -->
+
+        <section
+            id="location"
+            class="section"
+        >
+
+            <div class="section-heading">
+
+                <span class="section-label">
+                    LOCATION ANALYSIS
+                </span>
+
+                <h2>
+                    Connectivity Map
+                </h2>
+
+                <p>
+                    Find network quality around your location
+                    and identify better connectivity areas.
+                </p>
+
+            </div>
+
+
+            <div class="location-grid">
+
+
+                <!-- Map -->
+
+                <div class="panel map-panel">
+
+                    <div
+                        id="connectivityMap"
+                        class="map"
+                    ></div>
+
+
+                    <div class="map-legend">
+
+                        <div>
+                            <span class="legend-dot good"></span>
+                            Good
+                        </div>
+
+                        <div>
+                            <span class="legend-dot medium"></span>
+                            Medium
+                        </div>
+
+                        <div>
+                            <span class="legend-dot poor"></span>
+                            Poor
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+
+                <!-- Location Control -->
+
+                <div class="panel location-control">
+
+                    <span class="section-label">
+                        NETWORK NAVIGATOR
+                    </span>
+
+                    <h2>
+                        Analyze Your Area
+                    </h2>
+
+                    <p>
+                        Allow location access to measure your
+                        current network quality and build a
+                        connectivity map.
+                    </p>
+
+
+                    <button
+                        id="detectLocation"
+                        class="primary-button full-width"
+                    >
+                        📍 Detect My Location
+                    </button>
+
+
+                    <button
+                        id="saveLocation"
+                        class="secondary-button full-width"
+                    >
+                        + Save Network Point
+                    </button>
+
+
+                    <button
+                        id="findBetterArea"
+                        class="secondary-button full-width"
+                    >
+                        🧭 Find Better Network Area
+                    </button>
+
+
+                    <div
+                        id="locationResult"
+                        class="location-result"
+                    >
+                        Location not detected.
+                    </div>
+
+
+                    <div
+                        id="navigationResult"
+                        class="navigation-result"
+                    >
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+    </main>
+
+
+
+    <!-- =====================================================
+         FOOTER
+    ====================================================== -->
+
+    <footer>
+
+        <p>
+            Smart Connectivity Analyser
+        </p>
+
+        <span>
+            AI-powered Internet Quality Monitoring
+        </span>
+
+    </footer>
+
+
+    <!-- JavaScript -->
+    <script src="js/script.js"></script>
+
+</body>
+
+</html>

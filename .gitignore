@@ -1,0 +1,38 @@
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Local databases and runtime data
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Node dependencies, if present
+node_modules/
+
+# Editor and operating system files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Large research datasets
+datasets/
+
+# Local connectivity history database
+backend/network_history.db
+
+# Python bytecode
+__pycache__/
+*.py[cod]

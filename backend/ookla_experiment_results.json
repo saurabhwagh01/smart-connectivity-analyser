@@ -1,0 +1,36 @@
+{
+  "dataset": "Ookla aggregated mobile network data",
+  "source_rows_in_csv": 3551068,
+  "sample_rows": 48530,
+  "training_rows": 38824,
+  "test_rows": 9706,
+  "target": "latency_ms",
+  "target_unit": "milliseconds",
+  "features": [
+    "download_mbps",
+    "upload_mbps",
+    "download_latency_ms",
+    "upload_latency_ms",
+    "tests",
+    "devices"
+  ],
+  "baseline": {
+    "mae_ms": 19.2598,
+    "rmse_ms": 47.0242,
+    "r2": -0.0
+  },
+  "random_forest": {
+    "mae_ms": 18.951,
+    "rmse_ms": 46.3988,
+    "r2": 0.0264
+  },
+  "feature_importance": {
+    "download_mbps": 0.29638,
+    "upload_mbps": 0.223775,
+    "download_latency_ms": 0.242108,
+    "upload_latency_ms": 0.190329,
+    "tests": 0.035275,
+    "devices": 0.012133
+  },
+  "note": "Random 80/20 holdout on aggregated geographic records. This is an exploratory experiment, not a time-series forecast. Latency features may be closely related to the target, so performance should not be interpreted as proof of future prediction."
+}

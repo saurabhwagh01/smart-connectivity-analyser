@@ -1,0 +1,23 @@
+{
+  "evaluation_type": "Chronological 80/20 holdout",
+  "total_complete_records": 118,
+  "training_records": 94,
+  "unseen_test_records": 24,
+  "prediction_model": "Transformer + TCN",
+  "anomaly_model": "Transformer Autoencoder",
+  "prediction": {
+    "test_predictions": 24,
+    "mae": 10.4253,
+    "rmse": 13.2913,
+    "r2": -1.6635,
+    "final_training_loss": 0.026798
+  },
+  "anomaly": {
+    "training_average_reconstruction_error": 0.01082,
+    "test_average_reconstruction_error": 0.010468,
+    "threshold_95_percentile": 0.037155,
+    "test_records_above_threshold": 0,
+    "test_anomaly_rate_percent": 0.0
+  },
+  "note": "Existing trained models were not overwritten. Anomaly precision, recall and F1 require labelled anomaly records and are not calculated."
+}

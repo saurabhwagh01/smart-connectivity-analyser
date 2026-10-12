@@ -1,0 +1,47 @@
+{
+  "dataset": {
+    "database": "C:\\Users\\Kajal Wagh\\OneDrive\\Documents\\smart-connectivity-analyser\\network_history.db",
+    "complete_records": 118,
+    "training_records": 94,
+    "unseen_test_records": 24,
+    "test_ratio": 0.2,
+    "sequence_length": 8,
+    "features": [
+      "download_mbps",
+      "upload_mbps",
+      "ping_ms",
+      "jitter_ms",
+      "packet_loss",
+      "connectivity_score"
+    ]
+  },
+  "results": {
+    "previous_value": {
+      "mae": 5.916666666666667,
+      "rmse": 7.505553499465135,
+      "r2": 0.15066485184797407
+    },
+    "training_mean": {
+      "mae": 11.980496453900708,
+      "rmse": 14.48650006629677,
+      "r2": -2.164029999015553,
+      "mean_score": 38.06382978723404
+    },
+    "linear_regression": {
+      "mae": 8.507605435004008,
+      "rmse": 11.84414808824134,
+      "r2": -1.11505324330557
+    },
+    "random_forest": {
+      "mae": 6.4148036931523436,
+      "rmse": 7.936022254697698,
+      "r2": 0.05044658269330682
+    },
+    "hist_gradient_boosting": {
+      "mae": 8.915841870685462,
+      "rmse": 12.05567344255138,
+      "r2": -1.191273557752608
+    }
+  },
+  "best_by_rmse": "previous_value"
+}

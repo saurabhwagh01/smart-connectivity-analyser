@@ -1,0 +1,18 @@
+{
+  "dataset": {
+    "complete_records": 95,
+    "training_records": 76,
+    "unseen_test_records": 19,
+    "sequence_length": 8,
+    "test_ratio": 0.2
+  },
+  "model": "HistGradientBoostingRegressor",
+  "result": {
+    "mae": 18.173713034941763,
+    "rmse": 23.938456025516118,
+    "r2": -2.0701215956144132,
+    "training_samples": 68,
+    "test_samples": 19,
+    "feature_count": 39
+  }
+}

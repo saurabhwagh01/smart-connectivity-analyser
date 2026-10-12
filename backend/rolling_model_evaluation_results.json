@@ -1,0 +1,82 @@
+{
+  "evaluation": "Expanding-window chronological evaluation",
+  "complete_records": 118,
+  "sequence_length": 8,
+  "window_count": 4,
+  "windows": [
+    {
+      "window": 1,
+      "training_samples": 62,
+      "test_samples": 12,
+      "previous_value": {
+        "mae": 10.8333,
+        "rmse": 16.9312,
+        "r2": 0.6488
+      },
+      "random_forest": {
+        "mae": 16.337,
+        "rmse": 18.9402,
+        "r2": 0.5605
+      }
+    },
+    {
+      "window": 2,
+      "training_samples": 74,
+      "test_samples": 12,
+      "previous_value": {
+        "mae": 8.0833,
+        "rmse": 12.5996,
+        "r2": -1.4945
+      },
+      "random_forest": {
+        "mae": 5.9656,
+        "rmse": 8.1501,
+        "r2": -0.0438
+      }
+    },
+    {
+      "window": 3,
+      "training_samples": 86,
+      "test_samples": 12,
+      "previous_value": {
+        "mae": 6.0833,
+        "rmse": 7.3768,
+        "r2": 0.2978
+      },
+      "random_forest": {
+        "mae": 6.2143,
+        "rmse": 8.0778,
+        "r2": 0.158
+      }
+    },
+    {
+      "window": 4,
+      "training_samples": 98,
+      "test_samples": 12,
+      "previous_value": {
+        "mae": 5.75,
+        "rmse": 7.6322,
+        "r2": -0.2185
+      },
+      "random_forest": {
+        "mae": 6.4307,
+        "rmse": 7.5267,
+        "r2": -0.185
+      }
+    }
+  ],
+  "mean_window_metrics": {
+    "previous_value": {
+      "mae": 7.6875,
+      "rmse": 11.1349,
+      "r2": -0.1916
+    },
+    "random_forest": {
+      "mae": 8.7369,
+      "rmse": 10.6737,
+      "r2": 0.1224
+    }
+  },
+  "lower_mean_rmse_model": "random_forest",
+  "note": "Each window trains on earlier records and tests on a later block. Within each test block, later predictions use the immediately preceding observed record. Results measure rolling one-step-ahead prediction, not long-range forecasting."
+}

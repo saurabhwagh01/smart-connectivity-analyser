@@ -1,0 +1,37 @@
+{
+  "experiment": "Ookla throughput-only latency prediction",
+  "target": "latency_ms",
+  "features": [
+    "download_mbps",
+    "upload_mbps",
+    "tests",
+    "devices"
+  ],
+  "dataset_rows": 3551068,
+  "sample_rows": 50000,
+  "training_rows": 40000,
+  "test_rows": 10000,
+  "baseline": {
+    "mae_ms": 20.0019,
+    "rmse_ms": 53.402,
+    "r2": -0.0001
+  },
+  "random_forest": {
+    "mae_ms": 19.8102,
+    "rmse_ms": 52.7399,
+    "r2": 0.0246
+  },
+  "feature_importance": {
+    "download_mbps": 0.535426,
+    "upload_mbps": 0.407956,
+    "tests": 0.041074,
+    "devices": 0.015544
+  },
+  "limitations": [
+    "The dataset contains aggregated geographic tiles, not individual network sessions.",
+    "Random train-test splitting does not establish generalization to new locations or time periods.",
+    "R2 measures the variation explained on the test set.",
+    "Feature importance is not evidence of causation.",
+    "This experiment does not modify production models or the production database."
+  ]
+}

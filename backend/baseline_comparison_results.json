@@ -1,0 +1,25 @@
+{
+  "records": 94,
+  "training_records": 75,
+  "test_records": 19,
+  "models": {
+    "Previous Value": {
+      "mae": 9.8947,
+      "rmse": 16.0493,
+      "r2": 0.0951
+    },
+    "Training Mean": {
+      "mae": 19.1018,
+      "rmse": 20.8304,
+      "r2": -0.5244
+    },
+    "Transformer + TCN": {
+      "test_predictions": 19,
+      "mae": 11.484,
+      "rmse": 18.2533,
+      "r2": -0.1706
+    }
+  },
+  "best_by_rmse": "Previous Value",
+  "transformer_training_loss": 0.021884
+}
