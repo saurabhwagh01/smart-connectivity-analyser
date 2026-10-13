@@ -4,8 +4,6 @@ A web-based application for monitoring internet connectivity, measuring network 
 
 🔗 **Live Demo:** https://smart-connectivity-analyser.onrender.com/
 
-💻 **GitHub Repository:** https://github.com/saurabhwagh01/smart-connectivity-analyser
-
 ## 📌 Overview
 
 Smart Internet Connectivity Analyser helps users understand their internet connection through network performance measurements, historical statistics, geographical visualization, and AI-powered analysis.
