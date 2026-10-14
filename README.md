@@ -10,7 +10,7 @@ A web-based application for monitoring internet connectivity, measuring network 
     <img src="https://img.shields.io/badge/GitHub-Repository-181717?style=for-the-badge&logo=github" alt="GitHub Repository">
   </a>
 </p>
-## 📌 Overview
+<b>## 📌 Overview</b>
 
 Smart Internet Connectivity Analyser helps users understand their internet connection through network performance measurements, historical statistics, geographical visualization, and AI-powered analysis.
 
