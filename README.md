@@ -2,7 +2,7 @@
 
 A web-based application for monitoring internet connectivity, measuring network performance, visualizing network history, and analyzing connectivity quality using machine learning.
 
-<p align="center">
+ <p align="center">
   <a href="https://smart-connectivity-analyser.onrender.com/">
     <img src="https://img.shields.io/badge/Live%20Demo-Visit%20App-2ea44f?style=for-the-badge" alt="Live Demo">
   </a>
@@ -10,7 +10,6 @@ A web-based application for monitoring internet connectivity, measuring network 
     <img src="https://img.shields.io/badge/GitHub-Repository-181717?style=for-the-badge&logo=github" alt="GitHub Repository">
   </a>
 </p>
-
 ## 📌 Overview
 
 Smart Internet Connectivity Analyser helps users understand their internet connection through network performance measurements, historical statistics, geographical visualization, and AI-powered analysis.
