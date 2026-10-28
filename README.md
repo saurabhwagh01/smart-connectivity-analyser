@@ -9,7 +9,13 @@
 </p>
 
 <p align="center">
-  <a href="https://smart-connectivity-analyser.onrender.com/">🚀 Live Demo</a>
+  <a href="https://smart-connectivity-analyser.onrender.com/">
+    <img src="https://img.shields.io/badge/LIVE-DEMO-brightgreen?style=for-the-badge" alt="Live Demo">
+  </a>
+  <a href="https://github.com/saurabhwagh01/smart-connectivity-analyser">
+    <img src="https://img.shields.io/badge/GITHUB-REPOSITORY-black?style=for-the-badge&logo=github" alt="GitHub Repository">
+  </a>
+  <img src="https://img.shields.io/badge/WoCS-2026-blueviolet?style=for-the-badge" alt="Winter of Code 2026">
 </p>
 
 ---
