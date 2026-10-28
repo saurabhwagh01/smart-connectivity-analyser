@@ -30,17 +30,6 @@ The application combines a web frontend with a FastAPI backend and SQLite storag
 
 Internet connectivity can vary because of network congestion, signal conditions, and other factors. This project brings network measurements, historical records, visualisations, and experimental AI analysis together in one dashboard to make network performance easier to understand.
 
-## ❄️ Winter of Code (WoCS) 2026
-
-This project is being prepared for participation in **Winter of Code (WoCS) 2026**. Contributors interested in web development, Python, data science, and machine learning can explore the project, report bugs, suggest improvements, and contribute through pull requests.
-
-- **Project:** Smart Internet Connectivity Analyser
-- **Program:** Winter of Code (WoCS) 2026
-- **Contribution Guide:** [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Open Issues:** [GitHub Issues](https://github.com/saurabhwagh01/smart-connectivity-analyser/issues)
-
-Please check the official program requirements and project announcements for participation details. Update this wording if the project's participation or acceptance is officially confirmed.
-
 ## ✨ Features
 
 - 📡 **Network Monitoring:** Measure and display supported network metrics such as download speed, upload speed, ping, jitter, and packet loss.
