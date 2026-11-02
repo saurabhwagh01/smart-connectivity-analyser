@@ -37,6 +37,9 @@ let currentMetrics = {
    ========================================================= */
 
 function $(id) {
+    if (typeof document === "undefined") {
+        return null;
+    }
     return document.getElementById(id);
 }
 
@@ -80,10 +83,12 @@ function formatNumber(value, decimals = 1) {
    INITIALIZATION
    ========================================================= */
 
-document.addEventListener(
-    "DOMContentLoaded",
-    initializeApplication
-);
+if (typeof document !== "undefined") {
+    document.addEventListener(
+        "DOMContentLoaded",
+        initializeApplication
+    );
+}
 
 async function initializeApplication() {
 
@@ -2156,53 +2161,202 @@ function updateSessionStatistics() {
 
 
 /* =========================================================
+   MAP & LOCATION HELPERS (FALLBACK & PRIVACY)
+   ========================================================= */
+
+let activeTileLayer = null;
+
+function formatCoordinatePrivacy(latitude, longitude, precision = 2) {
+    if (
+        latitude === null ||
+        latitude === undefined ||
+        longitude === null ||
+        longitude === undefined ||
+        (typeof latitude === "string" && latitude.trim() === "") ||
+        (typeof longitude === "string" && longitude.trim() === "") ||
+        !Number.isFinite(Number(latitude)) ||
+        !Number.isFinite(Number(longitude))
+    ) {
+        return "Unavailable";
+    }
+
+    const lat = Number(latitude).toFixed(precision);
+    const lon = Number(longitude).toFixed(precision);
+    return `${lat}°, ${lon}°`;
+}
+
+function getLocationErrorMessage(error) {
+    if (!error) {
+        return "Unable to determine your location. Please try again.";
+    }
+
+    switch (error.code) {
+        case 1: // PERMISSION_DENIED
+            return "Location permission was denied. Please allow location access in your browser settings to view your position on the map.";
+        case 2: // POSITION_UNAVAILABLE
+            return "Location information is currently unavailable. Please verify your device's location services or network connection and try again.";
+        case 3: // TIMEOUT
+            return "Location request timed out. Please check your connection and try again.";
+        default:
+            return "Unable to determine your location. Please try again.";
+    }
+}
+
+function showMapFallback(title, message, canRetry = true) {
+    const mapElement = $("connectivityMap");
+    if (!mapElement) {
+        return;
+    }
+
+    const retryHtml = canRetry
+        ? `<button id="retryMapLoad" class="secondary-button map-retry-btn" type="button">🔄 Retry Loading Map</button>`
+        : "";
+
+    mapElement.innerHTML = `
+        <div class="map-fallback-message">
+            <span class="map-fallback-icon">🗺️</span>
+            <p class="map-fallback-title">${title}</p>
+            <p class="map-fallback-desc">${message}</p>
+            ${retryHtml}
+        </div>
+    `;
+
+    if (canRetry) {
+        const retryBtn = $("retryMapLoad");
+        if (retryBtn) {
+            retryBtn.addEventListener("click", () => {
+                retryBtn.disabled = true;
+                retryBtn.textContent = "⏳ Retrying...";
+                setTimeout(() => {
+                    initializeMap();
+                }, 150);
+            });
+        }
+    }
+}
+
+function showTileErrorWarning() {
+    const mapElement = $("connectivityMap");
+    if (!mapElement || $("mapTileWarning")) {
+        return;
+    }
+
+    const warning = document.createElement("div");
+    warning.id = "mapTileWarning";
+    warning.className = "map-tile-warning";
+    warning.innerHTML = `
+        <span>⚠️ Map tiles could not be loaded. Check your internet connection.</span>
+        <button id="retryTilesBtn" class="map-tile-retry-btn" type="button">Retry</button>
+    `;
+
+    mapElement.appendChild(warning);
+
+    const retryBtn = $("retryTilesBtn");
+    if (retryBtn) {
+        retryBtn.addEventListener("click", (event) => {
+            if (event && event.stopPropagation) {
+                event.stopPropagation();
+            }
+            if (activeTileLayer && typeof activeTileLayer.redraw === "function") {
+                activeTileLayer.redraw();
+            }
+        });
+    }
+}
+
+function clearTileErrorWarning() {
+    const warning = $("mapTileWarning");
+    if (warning && warning.parentNode) {
+        warning.parentNode.removeChild(warning);
+    }
+}
+
+
+/* =========================================================
    MAP
    ========================================================= */
 
 function initializeMap() {
-
-    const mapElement =
-        $("connectivityMap");
-
+    const mapElement = $("connectivityMap");
 
     if (!mapElement) {
         return;
     }
 
+    // Clean up existing map instance if retrying or re-initializing
+    if (connectivityMap) {
+        try {
+            connectivityMap.remove();
+        } catch (error) {
+            console.debug("Existing map cleanup error:", error);
+        }
+        connectivityMap = null;
+        currentLocationMarker = null;
+        activeTileLayer = null;
+    }
 
-    if (
-        typeof L === "undefined"
-    ) {
+    clearTileErrorWarning();
 
-        console.warn(
-            "Leaflet is not loaded."
+    if (typeof L === "undefined") {
+        console.warn("Leaflet library is not loaded.");
+        showMapFallback(
+            "Map Service Unavailable",
+            "The interactive map library could not be loaded. Dashboard connectivity tests and measurements remain fully operational.",
+            true
         );
-
         return;
     }
 
+    try {
+        mapElement.innerHTML = "";
 
-    connectivityMap =
-        L.map(
-            mapElement
-        ).setView(
-            [
-                18.5204,
-                73.8567
-            ],
+        connectivityMap = L.map(mapElement).setView(
+            [18.5204, 73.8567],
             10
         );
 
+        activeTileLayer = L.tileLayer(
+            "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+            {
+                attribution: "&copy; OpenStreetMap contributors",
+                maxZoom: 19
+            }
+        );
 
-    L.tileLayer(
-        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        {
-            attribution:
-                "&copy; OpenStreetMap contributors"
+        activeTileLayer.on("tileerror", () => {
+            showTileErrorWarning();
+        });
+
+        activeTileLayer.on("load", () => {
+            clearTileErrorWarning();
+        });
+
+        activeTileLayer.addTo(connectivityMap);
+
+        // Restore current location marker if already detected
+        if (
+            currentLocation &&
+            Number.isFinite(Number(currentLocation.latitude)) &&
+            Number.isFinite(Number(currentLocation.longitude))
+        ) {
+            showLocationOnMap(currentLocation.latitude, currentLocation.longitude);
         }
-    ).addTo(
-        connectivityMap
-    );
+
+        // Restore saved locations if present
+        if (Array.isArray(savedLocations) && savedLocations.length > 0) {
+            savedLocations.forEach(point => {
+                addSavedLocationToMap(point);
+            });
+        }
+    } catch (error) {
+        console.error("Map initialization failed:", error);
+        connectivityMap = null;
+        showMapFallback(
+            "Unable to Initialize Map",
+            "An error occurred while loading the map view. Network monitoring and tests continue to work normally.",
+            true
+        );
+    }
 }
 
 
@@ -2212,40 +2366,50 @@ function initializeMap() {
 
 function detectCurrentLocation() {
     const result = $("locationResult");
+    const detectBtn = $("detectLocation");
 
-    if (!navigator.geolocation) {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
         if (result) {
             result.textContent =
-                "Geolocation is not supported by this browser.";
+                "Geolocation is not supported by your browser or environment.";
+        }
+        if (detectBtn) {
+            detectBtn.disabled = true;
         }
         return;
     }
 
+    if (detectBtn) {
+        detectBtn.disabled = true;
+        detectBtn.textContent = "📍 Detecting Location...";
+    }
+
     if (result) {
-        result.textContent = "Detecting your location...";
+        result.textContent = "Detecting your approximate location...";
     }
 
     navigator.geolocation.getCurrentPosition(
         position => {
+            if (detectBtn) {
+                detectBtn.disabled = false;
+                detectBtn.textContent = "📍 Update My Location";
+            }
+
             const latitude = position.coords.latitude;
             const longitude = position.coords.longitude;
             const accuracy = position.coords.accuracy;
 
             console.log("Location detection:", {
-                latitude,
-                longitude,
-                accuracyMeters: accuracy,
+                accuracyMeters: Math.round(accuracy),
                 timestamp: new Date(position.timestamp)
             });
 
-            // Reject readings with more than 100 metres
-            // of reported uncertainty.
+            // Reject readings with more than 500 metres of reported uncertainty.
             if (accuracy > 500) {
                 if (result) {
                     result.textContent =
-                        `Location is too approximate ` +
-                        `(±${Math.round(accuracy)} m). ` +
-                        `Move to an open area and try again.`;
+                        `Location accuracy is too low (±${Math.round(accuracy)} m). ` +
+                        `Please move to an open area or reconnect and try again.`;
                 }
                 return;
             }
@@ -2258,11 +2422,11 @@ function detectCurrentLocation() {
             };
 
             if (result) {
+                // Privacy-conscious display: approximate area coordinates
+                const approxCoordinates = formatCoordinatePrivacy(latitude, longitude);
                 result.textContent =
-                    `Location detected: ` +
-                    `${latitude.toFixed(6)}, ` +
-                    `${longitude.toFixed(6)} ` +
-                    `(±${Math.round(accuracy)} m)`;
+                    `Location detected: approximate area ${approxCoordinates} ` +
+                    `(accuracy: ±${Math.round(accuracy)} m)`;
             }
 
             showLocationOnMap(latitude, longitude);
@@ -2271,18 +2435,12 @@ function detectCurrentLocation() {
         error => {
             console.error("Geolocation error:", error);
 
-            let message = "Unable to detect location.";
-
-            if (error.code === 1) {
-                message =
-                    "Location permission denied. Allow location access in Chrome.";
-            } else if (error.code === 2) {
-                message =
-                    "Location unavailable. Check your device's location settings.";
-            } else if (error.code === 3) {
-                message =
-                    "Location request timed out. Please try again.";
+            if (detectBtn) {
+                detectBtn.disabled = false;
+                detectBtn.textContent = "🔄 Retry Location Detection";
             }
+
+            const message = getLocationErrorMessage(error);
 
             if (result) {
                 result.textContent = message;
@@ -2291,8 +2449,8 @@ function detectCurrentLocation() {
 
         {
             enableHighAccuracy: true,
-            timeout: 30000,
-            maximumAge: 0
+            timeout: 20000,
+            maximumAge: 60000
         }
     );
 }
@@ -2305,24 +2463,27 @@ function detectCurrentLocation() {
 let currentLocationMarker = null;
 
 function showLocationOnMap(latitude, longitude) {
-    if (!connectivityMap) {
+    if (!connectivityMap || typeof L === "undefined") {
         return;
     }
 
-    const location = [latitude, longitude];
+    try {
+        const location = [latitude, longitude];
 
-    connectivityMap.setView(location, 15);
+        connectivityMap.setView(location, 14);
 
-    if (currentLocationMarker) {
-        currentLocationMarker.setLatLng(location);
-    } else {
-        currentLocationMarker = L.marker(location)
-            .addTo(connectivityMap);
+        if (currentLocationMarker) {
+            currentLocationMarker.setLatLng(location);
+        } else {
+            currentLocationMarker = L.marker(location).addTo(connectivityMap);
+        }
+
+        currentLocationMarker
+            .bindPopup("Current Location (Approximate Area)")
+            .openPopup();
+    } catch (error) {
+        console.warn("Could not display location marker on map:", error);
     }
-
-    currentLocationMarker
-        .bindPopup("Current Location")
-        .openPopup();
 }
 
 
@@ -2341,7 +2502,7 @@ function saveCurrentLocation() {
         if (result) {
 
             result.textContent =
-                "Detect your location first.";
+                "No location detected yet. Click 'Detect My Location' first.";
         }
 
         return;
@@ -2513,7 +2674,7 @@ function findBetterConnectionArea() {
         if (result) {
 
             result.textContent =
-                "Detect your current location first.";
+                "Current location not available. Click 'Detect My Location' first.";
         }
 
         return;
@@ -2855,7 +3016,7 @@ function setTestMessage(
    DEBUG API
    ========================================================= */
 
-window.smartConnectivity = {
+const smartConnectivity = {
 
     getCurrentNetworkData() {
 
@@ -2887,5 +3048,36 @@ window.smartConnectivity = {
     saveCurrentLocation,
 
 
-    findBetterConnectionArea
+    findBetterConnectionArea,
+
+    formatCoordinatePrivacy,
+
+    getLocationErrorMessage,
+
+    showMapFallback,
+
+    initializeMap,
+
+    showTileErrorWarning,
+
+    clearTileErrorWarning
 };
+
+if (typeof window !== "undefined") {
+    window.smartConnectivity = smartConnectivity;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+        formatCoordinatePrivacy,
+        getLocationErrorMessage,
+        showMapFallback,
+        initializeMap,
+        showTileErrorWarning,
+        clearTileErrorWarning,
+        detectCurrentLocation,
+        saveCurrentLocation,
+        findBetterConnectionArea,
+        smartConnectivity
+    };
+}
