@@ -222,18 +222,19 @@ For research or performance claims, evaluate models using a reproducible test sp
 
 ### Running Tests
 
-The connectivity score calculation (`js/connectivity-score.js`) has automated tests that use Node's built-in test runner, so no packages need to be installed. Node.js 18 or newer is required.
+The connectivity score calculation (`js/connectivity-score.js`) and map resilience/location helpers (`js/script.js`) have automated tests that use Node's built-in test runner, so no packages need to be installed. Node.js 18 or newer is required.
 
 From the project root:
 
 ```bash
-node --test tests/
+node --test tests/*.test.js
 ```
 
-On Node.js 22 or newer, pass the test file instead, because the directory form is not supported:
+You can also run individual test suites:
 
 ```bash
 node --test tests/connectivity-score.test.js
+node --test tests/connectivity_map.test.js
 ```
 
 ## 📁 Project Structure
