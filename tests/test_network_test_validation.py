@@ -233,3 +233,77 @@ def test_invalid_request_is_not_saved(client):
     history = client.get("/api/network-history?range=monthly")
 
     assert history.json() == []
+
+
+# ============================================================
+# MISSING VS VALID ZERO MEASUREMENTS
+# ============================================================
+
+def test_missing_ping_is_stored_as_null_not_zero(client):
+    payload = {
+        **VALID_TEST,
+        "ping_ms": None,
+    }
+
+    response = post_test(client, payload)
+
+    assert response.status_code == 200
+    saved = client.get("/api/network-history?range=monthly").json()[0]
+    assert saved["ping_ms"] is None
+
+
+def test_valid_zero_ping_is_stored_as_zero_not_null(client):
+    payload = {
+        **VALID_TEST,
+        "ping_ms": 0,
+    }
+
+    response = post_test(client, payload)
+
+    assert response.status_code == 200
+    saved = client.get("/api/network-history?range=monthly").json()[0]
+    assert saved["ping_ms"] == 0.0
+    assert saved["ping_ms"] is not None
+
+
+def test_valid_zero_and_null_coexist_in_history(client):
+    payload_zero = {
+        **VALID_TEST,
+        "timestamp": "2026-11-01T10:00:00.000Z",
+        "ping_ms": 0,
+    }
+    payload_null = {
+        **VALID_TEST,
+        "timestamp": "2026-11-01T11:00:00.000Z",
+        "ping_ms": None,
+    }
+
+    assert post_test(client, payload_zero).status_code == 200
+    assert post_test(client, payload_null).status_code == 200
+
+    history = client.get("/api/network-history?range=monthly").json()
+    assert len(history) == 2
+    assert history[0]["ping_ms"] == 0.0
+    assert history[1]["ping_ms"] is None
+
+
+def test_network_quality_returns_null_ping_when_unreachable(client, monkeypatch):
+    import subprocess
+
+    def mock_run(*args, **kwargs):
+        mock_proc = MagicMock()
+        mock_proc.stdout = "Destination host unreachable\nPackets: Sent = 10, Received = 0, Lost = 10 (100% loss)"
+        mock_proc.returncode = 1
+        return mock_proc
+
+    from unittest.mock import MagicMock
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
+    response = client.get("/api/network-quality")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ping_ms"] is None
+    assert data["jitter_ms"] is None
+    assert data["packet_loss"] == 100.0
+    assert data["status"] == "unreachable"
+

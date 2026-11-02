@@ -248,9 +248,77 @@ function getConnectivityStatus(score) {
 }
 
 
+/* =========================================================
+   METRIC VALIDATION & SESSION STATISTICS
+   ========================================================= */
+
+function isValidMetric(value) {
+    if (value === null || value === undefined) {
+        return false;
+    }
+    if (typeof value === "boolean") {
+        return false;
+    }
+    if (typeof value === "string" && value.trim() === "") {
+        return false;
+    }
+    if (typeof value === "object") {
+        return false;
+    }
+    const num = Number(value);
+    return Number.isFinite(num);
+}
+
+function calculateSessionStatistics(tests) {
+    if (!Array.isArray(tests) || tests.length === 0) {
+        return {
+            averageSpeed: null,
+            averagePing: null,
+            peakSpeed: null,
+            poorTestCount: 0
+        };
+    }
+
+    const validSpeeds = tests
+        .map(test => (test ? test.download_mbps : null))
+        .filter(isValidMetric)
+        .map(Number);
+
+    const validPings = tests
+        .map(test => (test ? test.ping_ms : null))
+        .filter(isValidMetric)
+        .map(Number);
+
+    const averageSpeed = validSpeeds.length > 0
+        ? validSpeeds.reduce((sum, v) => sum + v, 0) / validSpeeds.length
+        : null;
+
+    const peakSpeed = validSpeeds.length > 0
+        ? Math.max(...validSpeeds)
+        : null;
+
+    const averagePing = validPings.length > 0
+        ? validPings.reduce((sum, v) => sum + v, 0) / validPings.length
+        : null;
+
+    const poorTestCount = tests.filter(
+        test => test && isValidMetric(test.connectivity_score) && Number(test.connectivity_score) < 30
+    ).length;
+
+    return {
+        averageSpeed,
+        averagePing,
+        peakSpeed,
+        poorTestCount
+    };
+}
+
+
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {
         calculateConnectivityScore,
-        getConnectivityStatus
+        getConnectivityStatus,
+        isValidMetric,
+        calculateSessionStatistics
     };
 }

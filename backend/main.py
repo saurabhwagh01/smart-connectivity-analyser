@@ -599,21 +599,34 @@ def network_quality():
 
 
 
-    command = [
-
-        "ping",
-
-        target,
-
-        "-n",
-
-        str(packet_count),
-
-        "-w",
-
-        str(timeout_ms)
-
-    ]
+    if sys.platform.startswith("win"):
+        command = [
+            "ping",
+            target,
+            "-n",
+            str(packet_count),
+            "-w",
+            str(timeout_ms)
+        ]
+    elif sys.platform == "darwin":
+        command = [
+            "ping",
+            "-c",
+            str(packet_count),
+            "-W",
+            str(timeout_ms),
+            target
+        ]
+    else:
+        timeout_sec = max(1, int(timeout_ms / 1000))
+        command = [
+            "ping",
+            "-c",
+            str(packet_count),
+            "-W",
+            str(timeout_sec),
+            target
+        ]
 
 
 
@@ -682,13 +695,9 @@ def network_quality():
 
 
     matches = re.findall(
-
-        r"time[=<]\s*(\d+)\s*ms",
-
+        r"time[=<]\s*([\d.]+)\s*ms",
         output,
-
         re.IGNORECASE
-
     )
 
 
@@ -728,28 +737,14 @@ def network_quality():
 
 
     loss_match = re.search(
-
-        r"\((\d+)%\s*loss\)",
-
+        r"\((\d+(?:\.\d+)?)%\s*loss\)|(\d+(?:\.\d+)?)%\s*packet\s*loss",
         output,
-
         re.IGNORECASE
-
     )
 
-
-
-
-
     if loss_match:
-
-
-
-        packet_loss = float(
-
-            loss_match.group(1)
-
-        )
+        loss_val = loss_match.group(1) or loss_match.group(2)
+        packet_loss = float(loss_val)
 
 
 

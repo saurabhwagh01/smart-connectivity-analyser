@@ -24,10 +24,12 @@ jobs:
           node-version: 20
 
       - name: Check JavaScript syntax
-        run: node --check js/script.js
+        run: |
+          node --check js/script.js
+          node --check js/connectivity-score.js
 
-      - name: Run connectivity score tests
-        run: node --test tests/connectivity-score.test.js
+      - name: Run JavaScript tests
+        run: node --test tests/connectivity-score.test.js tests/session-statistics.test.js
 
   python-checks:
     name: Python Backend Syntax

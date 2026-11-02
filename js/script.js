@@ -64,9 +64,16 @@ function setProgress(id, value) {
 }
 
 function formatNumber(value, decimals = 1) {
-    if (
+    if (typeof isValidMetric === "function") {
+        if (!isValidMetric(value)) {
+            return "--";
+        }
+    } else if (
         value === null ||
         value === undefined ||
+        typeof value === "boolean" ||
+        (typeof value === "string" && value.trim() === "") ||
+        typeof value === "object" ||
         !Number.isFinite(Number(value))
     ) {
         return "--";
@@ -804,6 +811,31 @@ async function finishCombinedTest() {
        Packet Loss
     */
 
+    /*
+       Ensure missing or failed measurements are identified
+       as unavailable on dashboard metric cards.
+    */
+
+    if (currentMetrics.download === null) {
+        setText("download", "Unavailable");
+    }
+
+    if (currentMetrics.upload === null) {
+        setText("upload", "Unavailable");
+    }
+
+    if (currentMetrics.ping === null) {
+        setText("ping", "Unavailable");
+    }
+
+    if (currentMetrics.jitter === null) {
+        setText("jitter", "Unavailable");
+    }
+
+    if (currentMetrics.packetLoss === null) {
+        setText("packetLoss", "Unavailable");
+    }
+
     updateConnectivityScore();
 
 
@@ -888,9 +920,26 @@ async function finishCombinedTest() {
     stopSessionTimer();
 
 
-    setTestMessage(
-        "Internet speed test completed."
-    );
+    const unavailableList = [];
+    if (currentMetrics.download === null) unavailableList.push("Download");
+    if (currentMetrics.upload === null) unavailableList.push("Upload");
+    if (currentMetrics.ping === null) unavailableList.push("Ping");
+    if (currentMetrics.jitter === null) unavailableList.push("Jitter");
+    if (currentMetrics.packetLoss === null) unavailableList.push("Packet Loss");
+
+    if (unavailableList.length === 5) {
+        setTestMessage(
+            "Network test completed: measurements could not be obtained."
+        );
+    } else if (unavailableList.length > 0) {
+        setTestMessage(
+            `Network test completed with measurements unavailable: ${unavailableList.join(", ")}.`
+        );
+    } else {
+        setTestMessage(
+            "Internet speed test completed."
+        );
+    }
 
 
     updateSessionStatistics();
@@ -1378,9 +1427,13 @@ function updateDiagnosis() {
         currentMetrics.download === null &&
         currentMetrics.ping === null
     ) {
-
-        recommendation.textContent =
-            "Run an Internet test to begin network analysis.";
+        if (sessionTests.length > 0) {
+            recommendation.textContent =
+                "Network measurements could not be obtained. Check network connection and backend service.";
+        } else {
+            recommendation.textContent =
+                "Run an Internet test to begin network analysis.";
+        }
 
         return;
     }
@@ -1445,9 +1498,20 @@ function updateDiagnosis() {
 
 
     if (problems.length === 0) {
+        const unavailable = [];
+        if (currentMetrics.download === null) unavailable.push("download speed");
+        if (currentMetrics.upload === null) unavailable.push("upload speed");
+        if (currentMetrics.ping === null) unavailable.push("ping");
+        if (currentMetrics.jitter === null) unavailable.push("jitter");
+        if (currentMetrics.packetLoss === null) unavailable.push("packet loss");
 
-        recommendation.textContent =
-            "Current measurements do not show a major connectivity issue.";
+        if (unavailable.length > 0 && sessionTests.length > 0) {
+            recommendation.textContent =
+                `Current available measurements do not show a major issue, but some metrics were unavailable: ${unavailable.join(", ")}.`;
+        } else {
+            recommendation.textContent =
+                "Current measurements do not show a major connectivity issue.";
+        }
 
         return;
     }
@@ -2038,17 +2102,17 @@ function updateSessionStatistics() {
 
         setText(
             "averageSpeed",
-            "0 Mbps"
+            "--"
         );
 
         setText(
             "averagePing",
-            "0 ms"
+            "--"
         );
 
         setText(
             "peakSpeed",
-            "0 Mbps"
+            "--"
         );
 
         setText(
@@ -2060,77 +2124,44 @@ function updateSessionStatistics() {
     }
 
 
-    const speeds =
-        sessionTests
-            .map(
-                test =>
-                    Number(
-                        test.download_mbps
-                    )
-            )
-            .filter(
-                Number.isFinite
-            );
-
-
-    const pings =
-        sessionTests
-            .map(
-                test =>
-                    Number(
-                        test.ping_ms
-                    )
-            )
-            .filter(
-                Number.isFinite
-            );
-
-
-    const averageSpeed =
-        speeds.length
-            ? speeds.reduce(
-                (a, b) => a + b,
-                0
-            ) / speeds.length
-            : 0;
-
-
-    const averagePing =
-        pings.length
-            ? pings.reduce(
-                (a, b) => a + b,
-                0
-            ) / pings.length
-            : 0;
-
-
-    const peakSpeed =
-        speeds.length
-            ? Math.max(...speeds)
-            : 0;
+    const stats =
+        typeof calculateSessionStatistics === "function"
+            ? calculateSessionStatistics(sessionTests)
+            : {
+                averageSpeed: null,
+                averagePing: null,
+                peakSpeed: null,
+                poorTestCount: 0
+            };
 
 
     setText(
         "averageSpeed",
-        `${formatNumber(
-            averageSpeed
-        )} Mbps`
+        stats.averageSpeed !== null
+            ? `${formatNumber(
+                stats.averageSpeed
+            )} Mbps`
+            : "Unavailable"
     );
 
 
     setText(
         "averagePing",
-        `${formatNumber(
-            averagePing
-        )} ms`
+        stats.averagePing !== null
+            ? `${formatNumber(
+                stats.averagePing
+            )} ms`
+            : "Unavailable"
     );
 
 
     setText(
         "peakSpeed",
-        `${formatNumber(
-            peakSpeed
-        )} Mbps`
+        stats.peakSpeed !== null
+            ? `${formatNumber(
+                stats.peakSpeed
+            )} Mbps`
+            : "Unavailable"
     );
 
 
@@ -2139,18 +2170,9 @@ function updateSessionStatistics() {
        not real measured downtime minutes.
     */
 
-    const poorTests =
-        sessionTests.filter(
-            test =>
-                Number(
-                    test.connectivity_score
-                ) < 30
-        ).length;
-
-
     setText(
         "downtime",
-        `${poorTests} min`
+        `${stats.poorTestCount} min`
     );
 }
 
