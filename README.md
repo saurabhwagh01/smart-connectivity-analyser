@@ -107,74 +107,223 @@ flowchart TD
 
 ## 📋 Prerequisites
 
-- Python compatible with the dependencies listed in `requirements.txt`.
-- Git.
-- A modern web browser.
-- pip, the Python package installer.
+Before setting up the project, make sure you have installed:
 
-**Python compatibility note:** PyTorch and other dependencies may have operating-system and Python-version requirements. If installation fails, check the dependency versions and use a supported Python environment.
+- **Python:** A version compatible with the dependencies listed in `requirements.txt`.
+- **Node.js 18 or newer (optional):** Required only for running the JavaScript tests.
+- **Git:** Required to clone the repository.
+- **pip:** Python's package installer.
+- **Visual Studio Code (recommended):** For editing and running the project.
+- **A modern web browser:** Google Chrome, Microsoft Edge, Firefox, or another supported browser.
+
+### Check Your Installation
+
+Open a terminal and run:
+
+```bash
+python --version
+python -m pip --version
+git --version
+```
+
+Make sure all three commands display their installed versions.
+
+**Note:** Some Python dependencies, particularly PyTorch, have Python-version and operating-system compatibility requirements. Use a Python environment supported by the versions specified in 'requirements.txt'.
+
 
 ## 🚀 Getting Started
 
-### 1. Clone the Repository
+Follow these steps to download, install, and run Smart Internet Connectivity Analyser locally.
+
+### Step 1: Clone the Repository
+
+Open a terminal and run:
 
 ```bash
 git clone https://github.com/saurabhwagh01/smart-connectivity-analyser.git
+```
+
+Move into the project directory:
+
+```bash
 cd smart-connectivity-analyser
 ```
 
-### 2. Create a Virtual Environment
+### Step 2: Create a Python Virtual Environment
 
-**Windows PowerShell:**
+A virtual environment keeps the project's Python dependencies separate from other Python projects.
+
+**Windows (PowerShell):**
+
+Create the environment:
 
 ```powershell
 python -m venv .venv
+```
+
+Activate the virtual environment:
+
+```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell blocks activation, you can use the environment's Python executable directly:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
+After activation, your terminal should display `(.venv)`.
 
 **macOS / Linux:**
 
+Create the environment:
+
 ```bash
 python3 -m venv .venv
+```
+
+Activate it:
+
+```bash
 source .venv/bin/activate
 ```
 
-### 3. Install Dependencies
+### Step 3: Install Project Dependencies
 
-Run from the project root:
+Make sure you are in the project root directory and your virtual environment is activated.
+
+Upgrade pip if necessary:
+
+```bash
+python -m pip install --upgrade pip
+```
+
+Install the application dependencies:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 4. Run the Backend
+Wait until the installation completes successfully.
 
-From the project root:
+### Step 4: Start the FastAPI Backend
+
+From the project root directory, run:
 
 ```bash
 python -m uvicorn backend.main:app --reload
 ```
 
-The backend API should be available at:
+The backend development server should start at:
 
-- **API health check:** http://127.0.0.1:8000/api/health
-- **Interactive API documentation:** http://127.0.0.1:8000/docs
+**http://127.0.0.1:8000**
 
-The root address `http://127.0.0.1:8000/` is an application page only if the backend is configured to serve one.
+Keep this terminal open while using the application.
 
-### 5. Open the Frontend
+### Step 5: Check the Backend API
 
-If you use the VS Code Live Server extension, open `index.html` with Live Server. Alternatively, use the static web server configured for your project.
+Open your browser and visit the following addresses:
 
-Make sure the frontend's API configuration points to the local FastAPI backend. Live Server may use a different port from the backend.
+- **API Health Check:** [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+- **Interactive API Documentation:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-**AI models:** AI features may require the expected model files and enough complete network records. Check the AI status endpoint if predictions or anomaly analysis are unavailable.
+The health endpoint can be used to check whether the backend is responding.
+
+The `/docs` page allows you to explore and test the available API endpoints.
+
+### Step 6: Open the Frontend
+
+The frontend is available through the root `index.html` file.
+
+Using Visual Studio Code Live Server:
+
+1. Open the project folder in Visual Studio Code.
+2. Open `index.html`.
+3. Right-click inside the editor.
+4. Select **Open with Live Server**.
+5. The frontend will open in your default browser.
+
+Make sure the frontend's API configuration points to the local FastAPI backend at `http://127.0.0.1:8000/api`.
+
+### Step 7: Verify Frontend and Backend Connectivity
+
+Make sure the FastAPI backend is running before testing features that require backend communication.
+
+To verify that the backend is responding, open:
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+If the frontend cannot communicate with the backend, check the API configuration and your browser's Developer Tools (Console and Network tabs) for errors.
+
+### Step 8: Check AI Feature Availability
+
+Some AI features depend on trained model files and sufficient complete network test records.
+
+If predictions or anomaly analysis are unavailable, check the AI status endpoint:
+
+```text
+http://127.0.0.1:8000/api/ai/status
+```
+
+AI results are experimental and may not be available until the required data and model files are present.
+
+
+## 🛠️ Troubleshooting
+
+If you encounter problems while setting up or running the project, try the following solutions.
+
+### Python is not recognized
+
+- Make sure Python is installed.
+- On Windows, try checking the installation with:
+
+```powershell
+py --version
+```
+
+- If Python is installed but not recognized, check that it is added to your system PATH.
+
+### Virtual environment activation fails on Windows
+
+If PowerShell blocks script execution, you can use the virtual environment's Python executable directly:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+```
+
+### Dependency installation fails
+
+- Make sure you are running commands from the project root directory.
+- Confirm that your virtual environment is activated.
+- Check that your Python version is compatible with the dependencies in `requirements.txt`.
+- Try installing the dependencies again:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+### Backend server does not start
+
+- Make sure you are in the project root directory.
+- Confirm that the required dependencies are installed.
+- Check whether port `8000` is already being used by another process.
+- Start the backend again:
+
+```powershell
+python -m uvicorn backend.main:app --reload
+```
+
+### Frontend cannot connect to the backend
+
+- Make sure the FastAPI backend is running.
+- Confirm that the frontend API configuration points to `http://127.0.0.1:8000`.
+- Open `http://127.0.0.1:8000/api/health` in your browser to check the backend.
+- Check your browser's developer tools for errors in the Console and Network tabs.
+
+### AI features are unavailable
+
+- Check whether the required model files are present.
+- Make sure the application has sufficient connectivity records for analysis.
+- Check the AI status endpoint at `http://127.0.0.1:8000/api/ai/status`.
+- Review the backend terminal output for additional error messages.
 
 ## 🔌 API Endpoints
 
