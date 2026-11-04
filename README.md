@@ -169,6 +169,8 @@ Activate the virtual environment:
 
 After activation, your terminal should display `(.venv)`.
 
+If PowerShell blocks activation, you can use the virtual environment's Python executable directly without activating it. Use `.\.venv\Scripts\python.exe` instead of `python` when running Python commands in the following steps.
+
 **macOS / Linux:**
 
 Create the environment:
@@ -240,19 +242,7 @@ Using Visual Studio Code Live Server:
 
 Make sure the frontend's API configuration points to the local FastAPI backend at `http://127.0.0.1:8000/api`.
 
-### Step 7: Verify Frontend and Backend Connectivity
-
-Make sure the FastAPI backend is running before testing features that require backend communication.
-
-To verify that the backend is responding, open:
-
-```text
-http://127.0.0.1:8000/api/health
-```
-
-If the frontend cannot communicate with the backend, check the API configuration and your browser's Developer Tools (Console and Network tabs) for errors.
-
-### Step 8: Check AI Feature Availability
+### Step 7: Check AI Feature Availability
 
 Some AI features depend on trained model files and sufficient complete network test records.
 
@@ -280,42 +270,22 @@ py --version
 
 - If Python is installed but not recognized, check that it is added to your system PATH.
 
-### Virtual environment activation fails on Windows
-
-If PowerShell blocks script execution, you can use the virtual environment's Python executable directly:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
-```
-
 ### Dependency installation fails
 
 - Make sure you are running commands from the project root directory.
 - Confirm that your virtual environment is activated.
 - Check that your Python version is compatible with the dependencies in `requirements.txt`.
-- Try installing the dependencies again:
-
-```powershell
-python -m pip install -r requirements.txt
-```
 
 ### Backend server does not start
 
 - Make sure you are in the project root directory.
 - Confirm that the required dependencies are installed.
 - Check whether port `8000` is already being used by another process.
-- Start the backend again:
-
-```powershell
-python -m uvicorn backend.main:app --reload
-```
 
 ### Frontend cannot connect to the backend
 
 - Make sure the FastAPI backend is running.
-- Confirm that the frontend API configuration points to `http://127.0.0.1:8000`.
-- Open `http://127.0.0.1:8000/api/health` in your browser to check the backend.
+- Confirm that the frontend API configuration points to `http://127.0.0.1:8000/api`.
 - Check your browser's developer tools for errors in the Console and Network tabs.
 
 ### AI features are unavailable
