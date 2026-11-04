@@ -15,6 +15,10 @@ let backendQuality = null;
 let speedTestFinished = false;
 let backendTestFinished = false;
 
+// Set once finishCombinedTest() has run for the current test,
+// so a late callback cannot save the same test twice.
+let testFinalized = false;
+
 let sessionTests = [];
 let savedLocations = [];
 let networkChart = null;
@@ -61,6 +65,14 @@ function setProgress(id, value) {
     );
 
     element.style.width = `${safeValue}%`;
+
+    // The parent .progress-bar carries role="progressbar".
+    if (element.parentElement) {
+        element.parentElement.setAttribute(
+            "aria-valuenow",
+            String(Math.round(safeValue))
+        );
+    }
 }
 
 function formatNumber(value, decimals = 1) {
@@ -165,6 +177,68 @@ function setupButtons() {
     }
 
 
+    setupMobileMenu();
+}
+
+
+/* =========================================================
+   MOBILE MENU
+   ========================================================= */
+
+function setupMobileMenu() {
+
+    const menuButton = $("menuButton");
+
+    const navigation = $("primaryNavigation");
+
+    if (!menuButton || !navigation) {
+        return;
+    }
+
+
+    function setMenuOpen(open) {
+        navigation.classList.toggle("open", open);
+
+        menuButton.setAttribute(
+            "aria-expanded",
+            String(open)
+        );
+    }
+
+
+    menuButton.addEventListener(
+        "click",
+        () => {
+            setMenuOpen(
+                !navigation.classList.contains("open")
+            );
+        }
+    );
+
+
+    // Close the menu after a link is chosen.
+    navigation.addEventListener(
+        "click",
+        event => {
+            if (event.target.closest("a")) {
+                setMenuOpen(false);
+            }
+        }
+    );
+
+
+    document.addEventListener(
+        "keydown",
+        event => {
+            if (
+                event.key === "Escape" &&
+                navigation.classList.contains("open")
+            ) {
+                setMenuOpen(false);
+                menuButton.focus();
+            }
+        }
+    );
 }
 
 
@@ -275,6 +349,7 @@ async function startInternetTest() {
     testStartTime = Date.now();
     speedTestFinished = false;
     backendTestFinished = false;
+    testFinalized = false;
     backendQuality = null;
 
     resetCurrentTestUI();
@@ -282,9 +357,11 @@ async function startInternetTest() {
 
     const button = $("startTest");
 
+    // aria-disabled instead of disabled keeps keyboard focus on
+    // the button; testRunning already blocks repeat clicks.
     if (button) {
-        button.disabled = true;
-        button.textContent = "Testing...";
+        button.setAttribute("aria-disabled", "true");
+        setText("startTestLabel", "Testing...");
     }
 
     setTestMessage("Starting network quality analysis...");
@@ -406,6 +483,13 @@ async function runCloudflareSpeedTest() {
         };
 
 
+        /*
+           The library keeps running after onError: it either
+           moves on to the next measurement or ends the test,
+           and both paths call onFinish afterwards. So onError
+           must not finish the test, or it is saved twice.
+        */
+
         speedTest.onError = error => {
 
             console.error(
@@ -414,14 +498,10 @@ async function runCloudflareSpeedTest() {
             );
 
 
-            speedTestFinished = true;
-
             setTestMessage(
-                "Speed test completed with limited measurements."
+                "A speed measurement failed. " +
+                "Continuing with the remaining measurements..."
             );
-
-
-            checkIfEverythingFinished();
         };
 
 
@@ -434,16 +514,20 @@ async function runCloudflareSpeedTest() {
 
         testTimeout = setTimeout(() => {
 
-            if (
-                speedTest &&
-                speedTest.isRunning
-            ) {
+            // Also covers a test that stopped without calling
+            // onFinish, now that onError no longer ends it.
+            if (!speedTestFinished) {
 
                 console.warn(
                     "Cloudflare test timeout."
                 );
 
-                speedTest.pause();
+                if (
+                    speedTest &&
+                    speedTest.isRunning
+                ) {
+                    speedTest.pause();
+                }
 
                 speedTestFinished = true;
 
@@ -768,11 +852,14 @@ function checkIfEverythingFinished() {
 
     if (
         !speedTestFinished ||
-        !backendTestFinished
+        !backendTestFinished ||
+        testFinalized
     ) {
         return;
     }
 
+
+    testFinalized = true;
 
     finishCombinedTest();
 }
@@ -863,9 +950,10 @@ async function finishCombinedTest() {
     );
 
 
-    await saveNetworkTest(
-        testData
-    );
+    const saved =
+        await saveNetworkTest(
+            testData
+        );
 
 
     await loadNetworkHistory();
@@ -878,10 +966,14 @@ async function finishCombinedTest() {
 
     if (button) {
 
-        button.disabled = false;
+        button.removeAttribute(
+            "aria-disabled"
+        );
 
-        button.textContent =
-            "Start Test";
+        setText(
+            "startTestLabel",
+            "Start Network Test"
+        );
     }
 
 
@@ -889,7 +981,10 @@ async function finishCombinedTest() {
 
 
     setTestMessage(
-        "Internet speed test completed."
+        buildTestCompletionMessage(
+            testData,
+            saved
+        )
     );
 
 
@@ -900,6 +995,58 @@ async function finishCombinedTest() {
         "FINAL NETWORK DATA:",
         testData
     );
+}
+
+
+/*
+   Tell the user which measurements failed and what to do,
+   instead of always reporting success.
+*/
+
+function buildTestCompletionMessage(
+    testData,
+    saved
+) {
+
+    const measurements = [
+        ["download speed", testData.download_mbps],
+        ["upload speed", testData.upload_mbps],
+        ["ping", testData.ping_ms],
+        ["jitter", testData.jitter_ms],
+        ["packet loss", testData.packet_loss]
+    ];
+
+    const missing = measurements
+        .filter(([, value]) =>
+            value === null ||
+            value === undefined ||
+            !Number.isFinite(Number(value))
+        )
+        .map(([name]) => name);
+
+
+    let message =
+        "Internet speed test completed.";
+
+    if (missing.length > 0) {
+        const missingList =
+            missing.length === 1
+                ? missing[0]
+                : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`;
+
+        message =
+            `Test finished, but ${missingList} ` +
+            `could not be measured. Check your Internet ` +
+            `connection and make sure the backend server ` +
+            `is running, then try again.`;
+    }
+
+    if (!saved) {
+        message +=
+            " The result could not be saved to your history.";
+    }
+
+    return message;
 }
 
 
@@ -1533,8 +1680,11 @@ async function updateAISections() {
 
             } else {
 
+                // Show the backend's reason, e.g. not enough data.
                 prediction.textContent =
-                    "AI prediction unavailable.";
+                    predictionData.message
+                        ? `AI prediction unavailable: ${predictionData.message}`
+                        : "AI prediction unavailable.";
             }
         }
 
@@ -1569,7 +1719,9 @@ async function updateAISections() {
             } else {
 
                 anomaly.textContent =
-                    "AI anomaly result unavailable.";
+                    anomalyData.message
+                        ? `AI anomaly detection unavailable: ${anomalyData.message}`
+                        : "AI anomaly result unavailable.";
             }
         }
 
@@ -1583,13 +1735,17 @@ async function updateAISections() {
         if (prediction) {
 
             prediction.textContent =
-                "AI prediction unavailable. Check the backend.";
+                "AI prediction unavailable because the request " +
+                "failed. Make sure the backend server is running, " +
+                "then reload the page.";
         }
 
         if (anomaly) {
 
             anomaly.textContent =
-                "AI anomaly detection unavailable. Check the backend.";
+                "AI anomaly detection unavailable because the " +
+                "request failed. Make sure the backend server is " +
+                "running, then reload the page.";
         }
     }
 }
@@ -1642,12 +1798,16 @@ async function saveNetworkTest(
         );
 
 
+        return true;
+
     } catch (error) {
 
         console.error(
             "Could not save network test:",
             error
         );
+
+        return false;
     }
 }
 
@@ -1773,6 +1933,13 @@ function updateHistoryChart(
     }
 
 
+    // Text alternative for screen readers.
+    canvas.setAttribute(
+        "aria-label",
+        describeHistoryChart(history)
+    );
+
+
     if (
         typeof Chart === "undefined"
     ) {
@@ -1783,6 +1950,11 @@ function updateHistoryChart(
 
         return;
     }
+
+
+    // Chart.js defaults to #666 text, which fails contrast
+    // on the dark cards. Match --text-secondary instead.
+    Chart.defaults.color = "#91a4bd";
 
 
     const labels = [];
@@ -1942,6 +2114,35 @@ function updateHistoryChart(
                 }
             }
         );
+}
+
+
+function describeHistoryChart(
+    history
+) {
+
+    if (history.length === 0) {
+        return "Network history chart. " +
+            "No network history is available yet.";
+    }
+
+
+    const latest =
+        history[history.length - 1];
+
+    const tests =
+        history.length === 1
+            ? "test"
+            : "tests";
+
+    return (
+        `Network history chart of the last ` +
+        `${history.length} saved ${tests}, showing ` +
+        `connectivity score and download speed. ` +
+        `Latest test: score ` +
+        `${formatNumber(latest.connectivity_score, 0)}/100, ` +
+        `download ${formatNumber(latest.download_mbps)} Mbps.`
+    );
 }
 
 
@@ -2275,7 +2476,8 @@ function detectCurrentLocation() {
 
             if (error.code === 1) {
                 message =
-                    "Location permission denied. Allow location access in Chrome.";
+                    "Location permission denied. Allow location access " +
+                    "for this site in your browser settings, then try again.";
             } else if (error.code === 2) {
                 message =
                     "Location unavailable. Check your device's location settings.";

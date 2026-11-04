@@ -40,6 +40,7 @@ Internet connectivity can vary because of network congestion, signal conditions,
 - 🔍 **Anomaly Detection:** Use a Transformer Autoencoder to calculate reconstruction errors and flag records that exceed a configured threshold.
 - 🗄️ **Data Persistence:** Store supported network test records in an SQLite database.
 - ⚡ **REST API:** Access network measurements, history, prediction, and anomaly analysis through FastAPI endpoints.
+- ♿ **Accessibility:** Use the dashboard with a keyboard (skip link, visible focus indicators, working mobile menu), with labelled controls and charts for screen readers, and with status and error messages that are announced and explain what to do next.
 
 > **AI limitations:** Prediction and anomaly detection are experimental. Their performance must be evaluated on suitable test data. Anomaly detection requires validation against labelled normal and anomalous examples. Results may be unavailable when there are not enough complete records.
 

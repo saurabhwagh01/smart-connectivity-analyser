@@ -32,6 +32,14 @@
 
 <body>
 
+    <a
+        class="skip-link"
+        href="#main-content"
+    >
+        Skip to main content
+    </a>
+
+
     <!-- =====================================================
          NAVIGATION
     ====================================================== -->
@@ -40,7 +48,10 @@
 
         <div class="brand">
 
-            <div class="brand-icon">
+            <div
+                class="brand-icon"
+                aria-hidden="true"
+            >
                 📡
             </div>
 
@@ -52,7 +63,11 @@
         </div>
 
 
-        <nav class="nav-links">
+        <nav
+            id="primaryNavigation"
+            class="nav-links"
+            aria-label="Main navigation"
+        >
 
             <a href="#dashboard">
                 Dashboard
@@ -76,8 +91,12 @@
         <button
             id="menuButton"
             class="menu-button"
+            type="button"
+            aria-label="Main menu"
+            aria-controls="primaryNavigation"
+            aria-expanded="false"
         >
-            ☰
+            <span aria-hidden="true">☰</span>
         </button>
 
     </header>
@@ -87,7 +106,10 @@
          MAIN
     ====================================================== -->
 
-    <main class="container">
+    <main
+        id="main-content"
+        class="container"
+    >
 
 
         <!-- =================================================
@@ -120,13 +142,17 @@
                 <button
                     id="startTest"
                     class="primary-button"
+                    type="button"
+                    aria-describedby="testMessage"
                 >
-                    ▶ Start Network Test
+                    <span aria-hidden="true">▶</span>
+                    <span id="startTestLabel">Start Network Test</span>
                 </button>
 
                 <p
                     id="testMessage"
                     class="test-message"
+                    role="status"
                 >
                     Ready to test your connection.
                 </p>
@@ -147,6 +173,7 @@
                     <span
                         id="networkStatusDot"
                         class="status-dot"
+                        aria-hidden="true"
                     ></span>
 
                 </div>
@@ -209,14 +236,17 @@
              NETWORK METRICS
         ================================================== -->
 
-        <section class="metrics-grid">
+        <section
+            class="metrics-grid"
+            aria-label="Current network metrics"
+        >
 
 
             <!-- Download -->
 
             <div class="metric-card">
 
-                <div class="metric-icon">
+                <div class="metric-icon" aria-hidden="true">
                     ↓
                 </div>
 
@@ -239,7 +269,7 @@
 
             <div class="metric-card">
 
-                <div class="metric-icon">
+                <div class="metric-icon" aria-hidden="true">
                     ↑
                 </div>
 
@@ -262,7 +292,7 @@
 
             <div class="metric-card">
 
-                <div class="metric-icon">
+                <div class="metric-icon" aria-hidden="true">
                     ◉
                 </div>
 
@@ -285,7 +315,7 @@
 
             <div class="metric-card">
 
-                <div class="metric-icon">
+                <div class="metric-icon" aria-hidden="true">
                     ≋
                 </div>
 
@@ -308,7 +338,7 @@
 
             <div class="metric-card">
 
-                <div class="metric-icon">
+                <div class="metric-icon" aria-hidden="true">
                     %
                 </div>
 
@@ -331,7 +361,7 @@
 
             <div class="metric-card">
 
-                <div class="metric-icon">
+                <div class="metric-icon" aria-hidden="true">
                     📶
                 </div>
 
@@ -382,6 +412,13 @@
                     </div>
 
 
+                    <label
+                        for="historyRange"
+                        class="visually-hidden"
+                    >
+                        History range
+                    </label>
+
                     <select id="historyRange">
 
                         <option value="10">
@@ -400,7 +437,11 @@
                 <div class="chart-container">
 
                     <canvas
-                        id="networkChart">
+                        id="networkChart"
+                        role="img"
+                        aria-label="Network history chart. No network history is available yet.">
+                        Line chart of connectivity score and
+                        download speed for saved network tests.
                     </canvas>
 
                 </div>
@@ -516,7 +557,7 @@
 
             <div class="ai-card prediction-card">
 
-                <div class="ai-icon">
+                <div class="ai-icon" aria-hidden="true">
                     🧠
                 </div>
 
@@ -550,7 +591,7 @@
 
             <div class="ai-card anomaly-card">
 
-                <div class="ai-icon">
+                <div class="ai-icon" aria-hidden="true">
                     🔍
                 </div>
 
@@ -619,7 +660,7 @@
 
                     <div class="application-top">
 
-                        <span class="application-icon">
+                        <span class="application-icon" aria-hidden="true">
                             🎮
                         </span>
 
@@ -636,7 +677,14 @@
                         Gaming
                     </h3>
 
-                    <div class="progress-bar">
+                    <div
+                        class="progress-bar"
+                        role="progressbar"
+                        aria-label="Gaming readiness"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >
 
                         <div
                             id="gamingProgress"
@@ -659,7 +707,7 @@
 
                     <div class="application-top">
 
-                        <span class="application-icon">
+                        <span class="application-icon" aria-hidden="true">
                             📹
                         </span>
 
@@ -676,7 +724,14 @@
                         Video Call
                     </h3>
 
-                    <div class="progress-bar">
+                    <div
+                        class="progress-bar"
+                        role="progressbar"
+                        aria-label="Video call readiness"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >
 
                         <div
                             id="videoCallProgress"
@@ -699,7 +754,7 @@
 
                     <div class="application-top">
 
-                        <span class="application-icon">
+                        <span class="application-icon" aria-hidden="true">
                             🎬
                         </span>
 
@@ -716,7 +771,14 @@
                         Streaming
                     </h3>
 
-                    <div class="progress-bar">
+                    <div
+                        class="progress-bar"
+                        role="progressbar"
+                        aria-label="Streaming readiness"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >
 
                         <div
                             id="streamingProgress"
@@ -739,7 +801,7 @@
 
                     <div class="application-top">
 
-                        <span class="application-icon">
+                        <span class="application-icon" aria-hidden="true">
                             🌐
                         </span>
 
@@ -756,7 +818,14 @@
                         Browsing
                     </h3>
 
-                    <div class="progress-bar">
+                    <div
+                        class="progress-bar"
+                        role="progressbar"
+                        aria-label="Browsing readiness"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >
 
                         <div
                             id="browsingProgress"
@@ -785,7 +854,7 @@
 
             <div class="diagnosis-card">
 
-                <div class="diagnosis-icon">
+                <div class="diagnosis-icon" aria-hidden="true">
                     💡
                 </div>
 
@@ -849,23 +918,25 @@
                     <div
                         id="connectivityMap"
                         class="map"
+                        role="region"
+                        aria-label="Connectivity map. Use the arrow keys to pan and the plus and minus keys to zoom."
                     ></div>
 
 
                     <div class="map-legend">
 
                         <div>
-                            <span class="legend-dot good"></span>
+                            <span class="legend-dot good" aria-hidden="true"></span>
                             Good
                         </div>
 
                         <div>
-                            <span class="legend-dot medium"></span>
+                            <span class="legend-dot medium" aria-hidden="true"></span>
                             Medium
                         </div>
 
                         <div>
-                            <span class="legend-dot poor"></span>
+                            <span class="legend-dot poor" aria-hidden="true"></span>
                             Poor
                         </div>
 
@@ -897,30 +968,37 @@
                     <button
                         id="detectLocation"
                         class="primary-button full-width"
+                        type="button"
                     >
-                        📍 Detect My Location
+                        <span aria-hidden="true">📍</span>
+                        Detect My Location
                     </button>
 
 
                     <button
                         id="saveLocation"
                         class="secondary-button full-width"
+                        type="button"
                     >
-                        + Save Network Point
+                        <span aria-hidden="true">+</span>
+                        Save Network Point
                     </button>
 
 
                     <button
                         id="findBetterArea"
                         class="secondary-button full-width"
+                        type="button"
                     >
-                        🧭 Find Better Network Area
+                        <span aria-hidden="true">🧭</span>
+                        Find Better Network Area
                     </button>
 
 
                     <div
                         id="locationResult"
                         class="location-result"
+                        role="status"
                     >
                         Location not detected.
                     </div>
@@ -929,8 +1007,8 @@
                     <div
                         id="navigationResult"
                         class="navigation-result"
-                    >
-                    </div>
+                        role="status"
+                    ></div>
 
                 </div>
 
