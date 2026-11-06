@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 from fastapi.encoders import jsonable_encoder
 
@@ -29,7 +29,7 @@ import subprocess
 import re
 
 import statistics
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 # ============================================================
 # AI MODEL IMPORTS
@@ -1203,164 +1203,120 @@ def save_network_test(data: NetworkTest):
 
 
 
+
 @app.get("/api/network-history")
-
 def get_network_history(
-
-    range: str = "recent"
-
+    range: str = "recent",
+    start_date: date | None = None,
+    end_date: date | None = None,
+    min_score: float | None = Query(default=None, ge=0, le=100),
+    max_score: float | None = Query(default=None, ge=0, le=100),
 ):
+    # Validate date range.
+    if (
+        start_date is not None
+        and end_date is not None
+        and start_date > end_date
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="start_date must be on or before end_date",
+        )
 
-
+    # Validate connectivity score range.
+    if (
+        min_score is not None
+        and max_score is not None
+        and min_score > max_score
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="min_score must be less than or equal to max_score",
+        )
 
     connection = get_connection()
 
+    try:
+        cursor = connection.cursor()
 
+        conditions = []
+        parameters = []
 
-    cursor = connection.cursor()
+        # Preserve the existing time-range behaviour
+        # whenever a custom date range is not supplied.
+        if start_date is None and end_date is None:
 
+            if range == "all":
+                pass
 
+            else:
+                if range == "hourly":
+                    since = datetime.now() - timedelta(hours=24)
 
+                elif range == "daily":
+                    since = datetime.now() - timedelta(days=7)
 
+                elif range == "weekly":
+                    since = datetime.now() - timedelta(days=30)
 
-    if range == "hourly":
+                elif range == "monthly":
+                    since = datetime.now() - timedelta(days=365)
 
+                else:
+                    since = datetime.now() - timedelta(days=1)
 
+                conditions.append("timestamp >= ?")
+                parameters.append(since.isoformat())
 
-        since = datetime.now() - timedelta(
+        else:
+            if start_date is not None:
+                conditions.append("timestamp >= ?")
+                parameters.append(start_date.isoformat())
 
-            hours=24
+            if end_date is not None:
+                # Exclusive upper boundary includes the entire end date.
+                end_exclusive = end_date + timedelta(days=1)
 
-        )
+                conditions.append("timestamp < ?")
+                parameters.append(end_exclusive.isoformat())
 
+        if min_score is not None:
+            conditions.append("connectivity_score >= ?")
+            parameters.append(min_score)
 
+        if max_score is not None:
+            conditions.append("connectivity_score <= ?")
+            parameters.append(max_score)
 
-    elif range == "daily":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=7
-
-        )
-
-
-
-    elif range == "weekly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=30
-
-        )
-
-
-
-    elif range == "monthly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=365
-
-        )
-
-
-
-    else:
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=1
-
-        )
-
-
-
-
-
-    cursor.execute(
-
+        query = """
+             SELECT
+                id,
+                timestamp,
+                download_mbps,
+                upload_mbps,
+                ping_ms,
+                jitter_ms,
+                packet_loss,
+                network_type,
+                connectivity_score,
+                latitude,
+                longitude
+            FROM network_tests
         """
 
-        SELECT
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
 
-            id,
+        query += " ORDER BY timestamp ASC"
 
-            timestamp,
+        cursor.execute(query, parameters)
 
-            download_mbps,
+        rows = cursor.fetchall()
 
-            upload_mbps,
+        return [dict(row) for row in rows]
 
-            ping_ms,
-
-            jitter_ms,
-
-            packet_loss,
-
-            network_type,
-
-            connectivity_score,
-
-            latitude,
-
-            longitude
-
-
-
-        FROM network_tests
-
-
-
-        WHERE timestamp >= ?
-
-
-
-        ORDER BY timestamp ASC
-
-        """,
-
-
-
-        (
-
-            since.isoformat(),
-
-        )
-
-    )
-
-
-
-
-
-    rows = cursor.fetchall()
-
-
-
-    connection.close()
-
-
-
-
-
-    return [
-
-        dict(row)
-
-        for row in rows
-
-    ]
-
-
-
+    finally:
+        connection.close()
 
 
 

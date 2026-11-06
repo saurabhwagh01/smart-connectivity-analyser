@@ -391,13 +391,85 @@
                         <option value="20">
                             Extended
                         </option>
+                        <option value="all">All History</option>
 
                     </select>
 
                 </div>
+<div class="history-filters" aria-label="Filter network history">
+    <div class="history-filter-group">
+        <label for="historyStartDate">Start Date</label>
+        <input type="date" id="historyStartDate">
+    </div>
 
+    <div class="history-filter-group">
+        <label for="historyEndDate">End Date</label>
+        <input type="date" id="historyEndDate">
+    </div>
 
-                <div class="chart-container">
+    <div class="history-filter-group">
+        <label for="historyMinScore">Minimum Score</label>
+        <input
+            type="number"
+            id="historyMinScore"
+            min="0"
+            max="100"
+            step="any"
+            placeholder="0–100"
+        >
+    </div>
+
+    <div class="history-filter-group">
+        <label for="historyMaxScore">Maximum Score</label>
+        <input
+            type="number"
+            id="historyMaxScore"
+            min="0"
+            max="100"
+            step="any"
+            placeholder="0–100"
+        >
+    </div>
+
+    <div class="history-filter-actions">
+
+        <button
+            type="button"
+            id="applyHistoryFilters"
+            class="primary-button history-filter-button"
+        >
+            Apply Filters
+        </button>
+
+        <button
+            type="button"
+            id="resetHistoryFilters"
+            class="secondary-button history-filter-button history-reset-button"
+        >
+            Reset Filters
+        </button>
+
+    </div>
+
+    <p
+        id="historyFilterMessage"
+        class="history-filter-message"
+        role="status"
+        aria-live="polite"
+    ></p>
+
+</div>
+
+<p
+    id="historyEmptyState"
+    class="history-empty-state"
+    role="status"
+    hidden
+>
+    No network history records match the selected filters.
+</p>
+
+                <div class="chart-container" id="historyChartContainer">
 
                     <canvas
                         id="networkChart">
