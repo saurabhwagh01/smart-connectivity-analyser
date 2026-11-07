@@ -215,7 +215,7 @@ The backend development server should start at:
 
 **http://127.0.0.1:8000**
 
-Keep this terminal open while using the application.
+This is the backend server's root address. Keep this terminal open while using the application.
 
 ### Step 5: Check the Backend API
 
@@ -227,6 +227,8 @@ Open your browser and visit the following addresses:
 The health endpoint can be used to check whether the backend is responding.
 
 The `/docs` page allows you to explore and test the available API endpoints.
+
+**Note:** The backend server runs at `http://127.0.0.1:8000`, while its API endpoints use the `/api` prefix.
 
 ### Step 6: Open the Frontend
 
@@ -240,9 +242,27 @@ Using Visual Studio Code Live Server:
 4. Select **Open with Live Server**.
 5. The frontend will open in your default browser.
 
-Make sure the frontend's API configuration points to the local FastAPI backend at `http://127.0.0.1:8000/api`.
+Make sure the frontend's API configuration points to the local FastAPI API base URL:
 
-### Step 7: Check AI Feature Availability
+`http://127.0.0.1:8000/api`
+
+This is the API base URL used by the frontend to communicate with the backend.
+
+### Step 7: Verify Frontend and Backend Connectivity
+
+After starting the backend and opening the frontend:
+
+1. Make sure the FastAPI backend is running.
+2. Open the frontend in your browser using Live Server.
+3. Run a network test through the application.
+4. Check whether the frontend successfully retrieves and displays the available results.
+5. If the frontend cannot communicate with the backend, open your browser's Developer Tools and check the Console and Network tabs for errors.
+
+The backend health endpoint can also be accessed at:
+
+`http://127.0.0.1:8000/api/health`
+
+### Step 8: Check AI Feature Availability
 
 Some AI features depend on trained model files and sufficient complete network test records.
 
