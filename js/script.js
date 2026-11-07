@@ -1643,13 +1643,13 @@ async function updateAISections() {
         if (prediction) {
 
             prediction.textContent =
-                "AI prediction unavailable. Check the backend.";
+                "AI prediction unavailable: AI dependencies are missing.";
         }
 
         if (anomaly) {
 
             anomaly.textContent =
-                "AI anomaly detection unavailable. Check the backend.";
+                "AI anomaly detection unavailable: AI dependencies are missing.";
         }
     }
 }
@@ -1757,7 +1757,18 @@ async function loadNetworkHistory() {
             Array.isArray(data)
                 ? data
                 : [];
+const emptyState = $("historyEmptyState");
+const chartCanvas = $("networkChart");
 
+const hasHistory = history.length > 0;
+
+if (emptyState) {
+    emptyState.hidden = hasHistory;
+}
+
+if (chartCanvas) {
+    chartCanvas.hidden = !hasHistory;
+}
 
         updateHistoryChart(
             history

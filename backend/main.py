@@ -57,6 +57,7 @@ try:
 except Exception as error:
     torch = None
     AI_IMPORT_ERROR = str(error)
+    SEQUENCE_LENGTH = 8
 else:
     AI_IMPORT_ERROR = None
 

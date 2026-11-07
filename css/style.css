@@ -926,6 +926,33 @@ select {
 
     height: 280px;
 }
+.history-empty-state {
+    min-height: 250px;
+    padding: 25px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+    color: #64748b;
+}
+
+.history-empty-state[hidden] {
+    display: none !important;
+}
+
+.history-empty-state h3 {
+    font-size: 20px;
+    color: #1e293b;
+    margin: 0;
+}
+
+.history-empty-state p {
+    font-size: 14px;
+    line-height: 1.6;
+    margin: 0;
+}
 
 
 /* =========================================================
