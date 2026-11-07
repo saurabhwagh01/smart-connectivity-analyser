@@ -1204,160 +1204,79 @@ def save_network_test(data: NetworkTest):
 
 
 @app.get("/api/network-history")
-
 def get_network_history(
-
     range: str = "recent"
-
 ):
+    connection = None
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
 
+        if range == "hourly":
+            since = datetime.now() - timedelta(
+                hours=24
+            )
+        elif range == "daily":
+            since = datetime.now() - timedelta(
+                days=7
+            )
+        elif range == "weekly":
+            since = datetime.now() - timedelta(
+                days=30
+            )
+        elif range == "monthly":
+            since = datetime.now() - timedelta(
+                days=365
+            )
+        else:
+            since = datetime.now() - timedelta(
+                days=1
+            )
 
-
-    connection = get_connection()
-
-
-
-    cursor = connection.cursor()
-
-
-
-
-
-    if range == "hourly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            hours=24
-
+        cursor.execute(
+            """
+            SELECT
+                id,
+                timestamp,
+                download_mbps,
+                upload_mbps,
+                ping_ms,
+                jitter_ms,
+                packet_loss,
+                network_type,
+                connectivity_score,
+                latitude,
+                longitude
+            FROM network_tests
+            WHERE timestamp >= ?
+            ORDER BY timestamp ASC
+            """,
+            (
+                since.isoformat(),
+            )
         )
 
+        rows = cursor.fetchall()
+        if not rows:
+            return []
 
+        return [
+            dict(row)
+            for row in rows
+        ]
 
-    elif range == "daily":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=7
-
+    except sqlite3.Error:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load network history from database",
         )
 
-
-
-    elif range == "weekly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=30
-
-        )
-
-
-
-    elif range == "monthly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=365
-
-        )
-
-
-
-    else:
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=1
-
-        )
-
-
-
-
-
-    cursor.execute(
-
-        """
-
-        SELECT
-
-            id,
-
-            timestamp,
-
-            download_mbps,
-
-            upload_mbps,
-
-            ping_ms,
-
-            jitter_ms,
-
-            packet_loss,
-
-            network_type,
-
-            connectivity_score,
-
-            latitude,
-
-            longitude
-
-
-
-        FROM network_tests
-
-
-
-        WHERE timestamp >= ?
-
-
-
-        ORDER BY timestamp ASC
-
-        """,
-
-
-
-        (
-
-            since.isoformat(),
-
-        )
-
-    )
-
-
-
-
-
-    rows = cursor.fetchall()
-
-
-
-    connection.close()
-
-
-
-
-
-    return [
-
-        dict(row)
-
-        for row in rows
-
-    ]
+    finally:
+        if connection:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
 
 
 
