@@ -155,7 +155,7 @@ A virtual environment keeps the project's Python dependencies separate from othe
 
 **Windows (PowerShell):**
 
-Create the environment:
+Create the virtual environment:
 
 ```powershell
 python -m venv .venv
@@ -169,7 +169,7 @@ Activate the virtual environment:
 
 After activation, your terminal should display `(.venv)`.
 
-If PowerShell blocks activation, you can use the virtual environment's Python executable directly without activating it. Use `.\.venv\Scripts\python.exe` instead of `python` when running Python commands in the following steps.
+If PowerShell blocks activation, skip activation and do not attempt to activate the environment again. Use the virtual environment's Python executable directly by replacing `python` with `.\.venv\Scripts\python.exe` in all subsequent Python commands.
 
 **macOS / Linux:**
 
@@ -258,10 +258,6 @@ After starting the backend and opening the frontend:
 4. Check whether the frontend successfully retrieves and displays the available results.
 5. If the frontend cannot communicate with the backend, open your browser's Developer Tools and check the Console and Network tabs for errors.
 
-The backend health endpoint can also be accessed at:
-
-`http://127.0.0.1:8000/api/health`
-
 ### Step 8: Check AI Feature Availability
 
 Some AI features depend on trained model files and sufficient complete network test records.
@@ -301,6 +297,18 @@ py --version
 - Make sure you are in the project root directory.
 - Confirm that the required dependencies are installed.
 - Check whether port `8000` is already being used by another process.
+- Stop the running backend server by pressing `Ctrl + C` in its terminal.
+- Restart the backend using:
+
+  ```bash
+  python -m uvicorn backend.main:app --reload
+  ```
+
+- On Windows, if virtual environment activation is blocked, use:
+
+  ```powershell
+  .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+  ```
 
 ### Frontend cannot connect to the backend
 
