@@ -144,9 +144,15 @@ class FinalConnectivityPredictor:
 
         X, y = self._build_dataset(data)
 
-        self.model = build_production_prediction_model()
-
-        self.model.fit(X, y)
+        try:
+            self.model = build_production_prediction_model()
+            if self.model is None:
+                raise RuntimeError("HistGradientBoostingRegressor is not available")
+            self.model.fit(X, y)
+        except Exception as error:
+            self.ready = False
+            self.message = f"Model training failed: {error}"
+            return False
 
         self.training_samples = len(X)
         self.ready = True
