@@ -18,8 +18,21 @@ import sqlite3
 import json
 import math
 
-import torch
-import torch.nn as nn
+try:
+    from backend.timestamp_utils import to_utc_sql
+except ImportError:
+    from timestamp_utils import to_utc_sql
+
+
+try:
+    import torch
+    import torch.nn as nn
+    _Module = nn.Module
+except ImportError:
+    torch = None
+    nn = None
+    _Module = object
+
 
 
 # ============================================================
@@ -71,12 +84,14 @@ def load_network_data():
     connection = sqlite3.connect(DB_PATH)
 
     connection.row_factory = sqlite3.Row
+    connection.create_function("to_utc_iso", 1, to_utc_sql)
 
     try:
 
         rows = connection.execute(
             """
             SELECT
+                id,
                 timestamp,
                 download_mbps,
                 upload_mbps,
@@ -85,7 +100,7 @@ def load_network_data():
                 packet_loss,
                 connectivity_score
             FROM network_tests
-            ORDER BY timestamp ASC
+            ORDER BY to_utc_iso(timestamp) ASC, id ASC
             """
         ).fetchall()
 
@@ -259,7 +274,7 @@ def create_prediction_sequences(data, scaler):
 # TCN BLOCK
 # ============================================================
 
-class TCNBlock(nn.Module):
+class TCNBlock(_Module):
 
     def __init__(
         self,
@@ -298,7 +313,7 @@ class TCNBlock(nn.Module):
 # TRANSFORMER + TCN PREDICTOR
 # ============================================================
 
-class ConnectivityPredictor(nn.Module):
+class ConnectivityPredictor(_Module):
 
     def __init__(
         self,
@@ -373,7 +388,7 @@ class ConnectivityPredictor(nn.Module):
 # TRANSFORMER AUTOENCODER
 # ============================================================
 
-class TransformerAutoencoder(nn.Module):
+class TransformerAutoencoder(_Module):
 
     def __init__(
         self,

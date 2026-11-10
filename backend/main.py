@@ -56,6 +56,8 @@ try:
     )
 except Exception as error:
     torch = None
+    final_predictor = None
+    FINAL_PREDICTOR_READY = False
     AI_IMPORT_ERROR = str(error)
 else:
     AI_IMPORT_ERROR = None
@@ -365,7 +367,12 @@ def initialize_database():
 
 
 initialize_database()
-from backend.final_predictor import final_predictor, FINAL_PREDICTOR_READY
+if "final_predictor" not in globals() or final_predictor is None:
+    try:
+        from backend.final_predictor import final_predictor, FINAL_PREDICTOR_READY
+    except Exception:
+        final_predictor = None
+        FINAL_PREDICTOR_READY = False
 AI_MODELS_READY, AI_MODELS_MESSAGE = load_ai_models()
 
 
