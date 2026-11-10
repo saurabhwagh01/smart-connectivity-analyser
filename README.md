@@ -161,15 +161,7 @@ Create the virtual environment:
 python -m venv .venv
 ```
 
-Activate the virtual environment:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-After activation, your terminal should display `(.venv)`.
-
-If PowerShell blocks activation, skip activation and do not attempt to activate the environment again. Use the virtual environment's Python executable directly by replacing `python` with `.\.venv\Scripts\python.exe` in all subsequent Python commands.
+Use the virtual environment's Python executable directly for all subsequent Python commands. Activation is not required.
 
 **macOS / Linux:**
 
@@ -187,17 +179,19 @@ source .venv/bin/activate
 
 ### Step 3: Install Project Dependencies
 
-Make sure you are in the project root directory and your virtual environment is activated.
+Make sure you are in the project root directory.
 
-Upgrade pip if necessary:
+**Windows (PowerShell):**
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+**macOS / Linux:**
 
 ```bash
 python -m pip install --upgrade pip
-```
-
-Install the application dependencies:
-
-```bash
 python -m pip install -r requirements.txt
 ```
 
@@ -207,15 +201,24 @@ Wait until the installation completes successfully.
 
 From the project root directory, run:
 
+**Windows (PowerShell):**
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+```
+
+**macOS / Linux:**
+
 ```bash
 python -m uvicorn backend.main:app --reload
 ```
 
 The backend development server should start at:
 
-**http://127.0.0.1:8000**
+`http://127.0.0.1:8000`
 
-This is the backend server's root address. Keep this terminal open while using the application.
+This is the backend server's root address.
+Keep this terminal open while using the application.
 
 ### Step 5: Check the Backend API
 
@@ -289,8 +292,19 @@ py --version
 ### Dependency installation fails
 
 - Make sure you are running commands from the project root directory.
-- Confirm that your virtual environment is activated.
 - Check that your Python version is compatible with the dependencies in `requirements.txt`.
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+macOS / Linux:
+
+```bash
+python -m pip install -r requirements.txt
+```
 
 ### Backend server does not start
 
@@ -298,13 +312,15 @@ py --version
 - Confirm that the required dependencies are installed.
 - Check whether port `8000` is already being used by another process.
 - Stop the running backend server by pressing `Ctrl + C` in its terminal.
-- Restart the backend using:
+- Restart the backend using the appropriate command for your operating system.
+
+- macOS / Linux:
 
   ```bash
   python -m uvicorn backend.main:app --reload
   ```
 
-- On Windows, if virtual environment activation is blocked, use:
+- Windows (PowerShell):
 
   ```powershell
   .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
@@ -365,25 +381,25 @@ The detector has not yet been fully validated against labelled normal and anomal
 
 ## 🧪 Testing and Verification
 
-Run the automated API tests:
+### Python API Tests
+
+Run the automated API tests.
+
+**Windows (PowerShell):**
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest tests
+```
+
+**macOS / Linux:**
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Before submitting a change, where applicable:
-
-- Start the backend and check `/api/health`.
-- Verify that network test records can be saved and retrieved.
-- Check that historical charts display available records.
-- Test AI endpoints with enough complete records.
-- Confirm that unavailable measurements are not silently treated as real zero values.
-- Check browser developer tools and backend output for errors.
-
-For research or performance claims, evaluate models using a reproducible test split and compare them with suitable baseline methods. Report the metrics actually obtained; do not claim accuracy or anomaly-detection performance that has not been demonstrated.
-
-### Running Tests
+### JavaScript Tests
 
 The connectivity score calculation (`js/connectivity-score.js`) has automated tests that use Node's built-in test runner, so no packages need to be installed. Node.js 18 or newer is required.
 
@@ -398,6 +414,19 @@ On Node.js 22 or newer, pass the test file instead, because the directory form i
 ```bash
 node --test tests/connectivity-score.test.js
 ```
+
+### Verification Checklist
+
+Before submitting a change, where applicable:
+
+- Start the backend and check `/api/health`.
+- Verify that network test records can be saved and retrieved.
+- Check that historical charts display available records.
+- Test AI endpoints with enough complete records.
+- Confirm that unavailable measurements are not silently treated as real zero values.
+- Check browser developer tools and backend output for errors.
+
+For research or performance claims, evaluate models using a reproducible test split and compare them with suitable baseline methods. Report the metrics actually obtained; do not claim accuracy or anomaly-detection performance that has not been demonstrated.
 
 ## 📁 Project Structure
 
