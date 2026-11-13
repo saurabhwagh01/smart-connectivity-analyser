@@ -122,16 +122,18 @@ Do not claim that a test passed unless you actually ran it.
 
 ### Running Automated Tests
 
-Run the automated test suite before submitting changes:
+Run the dependency-free JavaScript unit tests before submitting changes:
 
 ```bash
 npm test
 ```
 
-Alternatively, run Node's built-in test runner directly:
+The browser scenario tests require Playwright and Chromium:
 
 ```bash
-node --test
+npm install --no-save playwright
+npx playwright install --with-deps chromium
+npm run test:browser
 ```
 
 For additional test options and instructions, see the [README.md](README.md#running-automated-tests).

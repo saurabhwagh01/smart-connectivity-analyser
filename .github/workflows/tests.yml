@@ -26,8 +26,8 @@ jobs:
       - name: Check JavaScript syntax
         run: node --check js/script.js
 
-      - name: Run connectivity score tests
-        run: node --test tests/connectivity-score.test.js
+      - name: Run JavaScript unit tests
+        run: npm test
 
   python-checks:
     name: Python Backend Tests

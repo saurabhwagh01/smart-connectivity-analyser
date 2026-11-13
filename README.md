@@ -244,47 +244,41 @@ The repository includes test suites verifying that:
 - Valid zero values (e.g. `0.0 Mbps`, `0.0 ms`, and `0.0 %` packet loss) are displayed correctly.
 - Unavailable values are never incorrectly displayed as zero.
 
-To run the frontend test suite:
+Run the dependency-free frontend unit tests from the project root:
 
 ```bash
 npm test
 ```
 
-Alternatively, run Node's built-in test runner directly:
+This runs the connectivity score, metric formatting, and history filter suites with Node's built-in test runner. No packages need to be installed. Node.js 18 or newer is required.
+
+You can also run individual test files:
 
 ```bash
-node --test
+node --test tests/connectivity-score.test.js
+node --test tests/metric_formatting.test.js
+node --test tests/history-filters.test.js
 ```
 
-Or run the specific test file:
-
-```bash
-node tests/metric_formatting.test.js
-```
-
-You can also run the suite using pytest:
+The metric formatting suite can also be run with pytest:
 
 ```bash
 pytest tests/test_frontend_metric_formatting.py
 ```
 
+#### Browser Scenario Tests
+
+The dashboard empty-state, API error, populated history, and AI fallback scenarios run in Chromium and require Playwright:
+
+```bash
+npm install --no-save playwright
+npx playwright install --with-deps chromium
+npm run test:browser
+```
+
+These browser checks are also run in CI by the Issue 5 focused checks workflow.
+
 For research or performance claims, evaluate models using a reproducible test split and compare them with suitable baseline methods. Report the metrics actually obtained; do not claim accuracy or anomaly-detection performance that has not been demonstrated.
-
-### Running Tests
-
-The connectivity score calculation (`js/connectivity-score.js`) has automated tests that use Node's built-in test runner, so no packages need to be installed. Node.js 18 or newer is required.
-
-From the project root:
-
-```bash
-node --test tests/
-```
-
-On Node.js 22 or newer, pass the test file instead, because the directory form is not supported:
-
-```bash
-node --test tests/connectivity-score.test.js
-```
 
 ## 📁 Project Structure
 

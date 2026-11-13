@@ -34,7 +34,7 @@ jobs:
             sleep 1
           done
       - run: node --check js/script.js
-      - run: node --test tests/dashboard-empty-states.test.js
+      - run: npm run test:browser
       - run: python -m py_compile backend/main.py
       - name: Verify backend starts without optional AI dependencies
         run: python tests/backend-startup-no-ai.py
