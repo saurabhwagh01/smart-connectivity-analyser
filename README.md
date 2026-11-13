@@ -446,7 +446,10 @@ smart-connectivity-analyser/
 │   ├── connectivity-map.png
 │   └── ai-analysis.png
 ├── tests/
+│   ├── metric_formatting.test.js
+│   └── test_frontend_metric_formatting.py
 ├── index.html
+├── package.json
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── README.md

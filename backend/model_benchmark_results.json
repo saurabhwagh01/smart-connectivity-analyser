@@ -1,0 +1,111 @@
+{
+  "benchmark": "Connectivity score prediction",
+  "protocol": {
+    "evaluation": "chronological holdout with rolling one-step-ahead inputs",
+    "test_ratio": 0.2,
+    "sequence_length": 8,
+    "target": "connectivity_score at the next record",
+    "input_features": [
+      "download_mbps",
+      "upload_mbps",
+      "ping_ms",
+      "jitter_ms",
+      "packet_loss",
+      "connectivity_score"
+    ],
+    "feature_rule": "Each prediction uses only the immediately preceding eight complete records.",
+    "test_input_rule": "Earlier observed records in the test period may be used as history for later one-step-ahead predictions.",
+    "preprocessing_rule": "Incomplete, non-numeric, non-finite, and out-of-range records are excluded; no values are imputed.",
+    "record_order": "timestamp ascending, then SQLite record ID ascending",
+    "prediction_bounds": [
+      0.0,
+      100.0
+    ],
+    "production_model": {
+      "name": "HistGradientBoostingRegressor",
+      "parameters": {
+        "max_iter": 300,
+        "learning_rate": 0.05,
+        "max_leaf_nodes": 15,
+        "l2_regularization": 0.1,
+        "random_state": 42
+      },
+      "evaluation": "Evaluated with the same chronological holdout as all baselines and candidates."
+    },
+    "shuffle": false,
+    "random_state": 42
+  },
+  "dataset": {
+    "database_name": "network_history.db",
+    "total_rows": 22,
+    "complete_records": 22,
+    "excluded_records": 0,
+    "training_records_before_windowing": 17,
+    "test_records": 5,
+    "training_samples": 9,
+    "test_samples": 5
+  },
+  "models": {
+    "previous_value": {
+      "mae": 2.0,
+      "rmse": 2.1908902300206643,
+      "r2": -0.7142857142857142,
+      "training_samples": 9,
+      "test_samples": 5,
+      "fit_seconds": 0.0
+    },
+    "training_mean": {
+      "mae": 37.22222222222223,
+      "rmse": 37.25981517882898,
+      "r2": -494.8192239858908,
+      "training_samples": 9,
+      "test_samples": 5,
+      "fit_seconds": 0.0
+    },
+    "linear_regression": {
+      "mae": 44.248498244416275,
+      "rmse": 47.244880376351,
+      "r2": -796.1709720627556,
+      "training_samples": 9,
+      "test_samples": 5,
+      "fit_and_predict_seconds": 0.015099199999895063
+    },
+    "random_forest": {
+      "mae": 37.447164285714315,
+      "rmse": 37.51592811148602,
+      "r2": -501.6588793093525,
+      "training_samples": 9,
+      "test_samples": 5,
+      "fit_and_predict_seconds": 0.22517789999983506
+    },
+    "hist_gradient_boosting_current": {
+      "mae": 37.22222222222223,
+      "rmse": 37.25981517882898,
+      "r2": -494.8192239858908,
+      "training_samples": 9,
+      "test_samples": 5,
+      "fit_and_predict_seconds": 2.7979371999999785,
+      "matches_production_configuration": true
+    },
+    "hist_gradient_boosting_engineered": {
+      "mae": 53.0,
+      "rmse": 53.02640851500316,
+      "r2": -1003.2142857142857,
+      "training_samples": 9,
+      "test_samples": 5,
+      "fit_and_predict_seconds": 0.10369960000025458
+    }
+  },
+  "best_by_rmse": "previous_value",
+  "tuning": {
+    "status": "skipped_insufficient_training_samples",
+    "minimum_training_samples": 30,
+    "available_training_samples": 9,
+    "best_params": null
+  },
+  "data_sufficiency": {
+    "status": "preliminary_small_sample",
+    "warning": "Results are preliminary: the dataset or held-out sample is small. Collect more real observations before making a model-selection or improvement claim.",
+    "deep_learning_note": "Transformer/TCN training is not included in this classical-model benchmark. The existing AI engine requires at least 50 complete records, and deep models should be evaluated only with a larger chronological training set."
+  }
+}

@@ -1,0 +1,69 @@
+name: Issue 5 focused checks
+
+'on':
+  pull_request:
+    branches: [master, main]
+  push:
+    branches: [improve-dashboard-empty-states]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install backend runtime dependencies
+        run: python -m pip install fastapi uvicorn
+      - name: Install Chromium for behavioral tests
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Start static dashboard server
+        run: |
+          python3 -m http.server 4173 --directory . > /tmp/dashboard-server.log 2>&1 &
+          for attempt in $(seq 1 20); do
+            curl --fail http://127.0.0.1:4173/index.html >/dev/null && break
+            sleep 1
+          done
+      - run: node --check js/script.js
+      - run: node --test tests/dashboard-empty-states.test.js
+      - run: python -m py_compile backend/main.py
+      - name: Verify backend starts without optional AI dependencies
+        run: python tests/backend-startup-no-ai.py
+
+  browser-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Start static dashboard server
+        run: |
+          python3 -m http.server 4173 --directory . > /tmp/dashboard-server.log 2>&1 &
+          for attempt in $(seq 1 20); do
+            curl --fail http://127.0.0.1:4173/index.html >/dev/null && break
+            sleep 1
+          done
+      - name: Run browser scenarios and capture screenshots
+        run: node tests/issue-5-browser-demo.cjs
+      - name: Upload maintainer demo screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-5-dashboard-demo
+          path: artifacts/issue-5-*.png
+          if-no-files-found: warn
+          retention-days: 30

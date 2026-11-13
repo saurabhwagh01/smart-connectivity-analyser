@@ -7,6 +7,7 @@ const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+    isValidMetric,
     calculateConnectivityScore,
     getConnectivityStatus
 } = require("../js/connectivity-score.js");
@@ -79,6 +80,30 @@ const BOUNDARIES = {
         [100, 0]
     ]
 };
+
+
+describe("isValidMetric", () => {
+
+    const valid = [0, 0.0001, 1, 45.2, 100, 1000];
+    const invalid = [
+        -0.0001, -1, NaN, Infinity, -Infinity,
+        null, undefined, "", "0", "45.2", "fast", true, {}, []
+    ];
+
+    for (const value of valid) {
+
+        test(`${String(value)} is valid`, () => {
+            assert.equal(isValidMetric(value), true);
+        });
+    }
+
+    for (const value of invalid) {
+
+        test(`${typeof value === "number" || value === undefined ? String(value) : JSON.stringify(value)} is invalid`, () => {
+            assert.equal(isValidMetric(value), false);
+        });
+    }
+});
 
 
 describe("calculateConnectivityScore", () => {
@@ -221,67 +246,76 @@ describe("calculateConnectivityScore", () => {
 
     /*
        Invalid inputs.
-       These tests record the CURRENT behaviour; they do not
-       describe the desired behaviour. Only null is skipped, so
-       other non-numbers fall through the comparisons.
+       Only finite, non-negative numbers are scored. Every other
+       value is skipped like null and contributes 0 points.
     */
 
-    describe("invalid inputs (current behaviour)", () => {
+    describe("invalid inputs", () => {
 
-        test("undefined metrics fall into the lowest bucket", () => {
-            assert.equal(scoreOnly("download", undefined), 3);
-            assert.equal(scoreOnly("upload", undefined), 2);
-            assert.equal(scoreOnly("ping", undefined), 1);
-            assert.equal(scoreOnly("jitter", undefined), 2);
-            assert.equal(scoreOnly("packetLoss", undefined), 0);
+        const METRIC_NAMES = Object.keys(NO_METRICS);
+
+        function assertNoPoints(value) {
+            for (const name of METRIC_NAMES) {
+                assert.equal(
+                    scoreOnly(name, value),
+                    0,
+                    `${name} ${String(value)} should add 0 points`
+                );
+            }
+        }
+
+        test("undefined metrics add 0 points", () => {
+            assertNoPoints(undefined);
         });
 
-        test("an empty metrics object scores 8, not 0", () => {
-            assert.equal(calculateConnectivityScore({}), 8);
+        test("NaN metrics add 0 points", () => {
+            assertNoPoints(NaN);
         });
 
-        test("NaN metrics fall into the lowest bucket", () => {
-            assert.equal(scoreOnly("download", NaN), 3);
-            assert.equal(scoreOnly("upload", NaN), 2);
-            assert.equal(scoreOnly("ping", NaN), 1);
-            assert.equal(scoreOnly("jitter", NaN), 2);
-            assert.equal(scoreOnly("packetLoss", NaN), 0);
+        test("Infinity and -Infinity add 0 points", () => {
+            assertNoPoints(Infinity);
+            assertNoPoints(-Infinity);
         });
 
-        test("negative speeds fall into the lowest bucket", () => {
-            assert.equal(scoreOnly("download", -5), 3);
-            assert.equal(scoreOnly("upload", -5), 2);
+        test("negative values add 0 points for every metric", () => {
+            assertNoPoints(-0.0001);
+            assertNoPoints(-1);
+            assertNoPoints(-10);
         });
 
-        test("negative ping, jitter and packet loss get full points", () => {
-            assert.equal(scoreOnly("ping", -10), 20);
-            assert.equal(scoreOnly("jitter", -10), 20);
-            assert.equal(scoreOnly("packetLoss", -1), 10);
+        test("empty strings add 0 points", () => {
+            assertNoPoints("");
         });
 
-        test("numeric strings are coerced to numbers", () => {
-            assert.equal(scoreOnly("download", "100"), 30);
-            assert.equal(scoreOnly("upload", "50"), 20);
-            assert.equal(scoreOnly("ping", "20"), 20);
-            assert.equal(scoreOnly("jitter", "5"), 20);
-            assert.equal(scoreOnly("packetLoss", "0.5"), 10);
+        test("numeric strings add 0 points", () => {
+            assertNoPoints("50");
+            assertNoPoints("0");
         });
 
-        test("non-numeric strings fall into the lowest bucket", () => {
-            assert.equal(scoreOnly("download", "fast"), 3);
-            assert.equal(scoreOnly("ping", "slow"), 1);
+        test("non-numeric strings add 0 points", () => {
+            assertNoPoints("fast");
         });
 
-        test("empty strings are coerced to 0", () => {
-            assert.equal(scoreOnly("download", ""), 3);
-            assert.equal(scoreOnly("ping", ""), 20);
+        test("an empty metrics object scores 0", () => {
+            assert.equal(calculateConnectivityScore({}), 0);
         });
 
-        test("a missing metrics object throws a TypeError", () => {
-            assert.throws(
-                () => calculateConnectivityScore(undefined),
-                TypeError
-            );
+        test("a missing metrics object scores 0", () => {
+            assert.equal(calculateConnectivityScore(undefined), 0);
+            assert.equal(calculateConnectivityScore(null), 0);
+        });
+
+        test("only valid metrics count when mixed with invalid ones", () => {
+            const score = calculateConnectivityScore({
+                download: 100,
+                upload: 50,
+                ping: -10,
+                jitter: NaN,
+                packetLoss: null
+            });
+
+            // 30 + 20
+            assert.equal(score, 50);
         });
     });
 });
