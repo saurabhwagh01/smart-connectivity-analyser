@@ -252,7 +252,7 @@ npm test
 
 This runs the connectivity score, metric formatting, and history filter suites with Node's built-in test runner. No packages need to be installed. Node.js 18 or newer is required.
 
-Use `npm test` for all dependency-free unit tests. Do not use `node --test tests/`, because that directory also contains the Playwright-dependent browser scenario test.
+Use `npm test` for all dependency-free unit tests.
 
 The metric formatting suite can also be run with pytest:
 

@@ -128,8 +128,6 @@ Run the dependency-free JavaScript unit tests before submitting changes:
 npm test
 ```
 
-Do not run `node --test tests/`; that directory also contains the Playwright-dependent browser scenario test. Use `npm test` for the dependency-free unit suites.
-
 The browser scenario tests require Playwright and Chromium:
 
 ```bash
