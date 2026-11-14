@@ -107,74 +107,237 @@ flowchart TD
 
 ## 📋 Prerequisites
 
-- Python compatible with the dependencies listed in `requirements.txt`.
-- Git.
-- A modern web browser.
-- pip, the Python package installer.
+Before setting up the project, make sure you have installed:
 
-**Python compatibility note:** PyTorch and other dependencies may have operating-system and Python-version requirements. If installation fails, check the dependency versions and use a supported Python environment.
+- **Python:** A version compatible with the dependencies listed in `requirements.txt`.
+- **Node.js 18 or newer (optional):** Required only for running the JavaScript tests.
+- **Git:** Required to clone the repository.
+- **pip:** Python's package installer.
+- **Visual Studio Code (recommended):** For editing and running the project.
+- **A modern web browser:** Google Chrome, Microsoft Edge, Firefox, or another supported browser.
+
+### Check Your Installation
+
+Open a terminal and run:
+
+```bash
+python --version
+python -m pip --version
+git --version
+```
+
+Make sure all three commands display their installed versions.
+
+**Note:** Some Python dependencies, particularly PyTorch, have Python-version and operating-system compatibility requirements. Use a Python environment supported by the versions specified in 'requirements.txt'.
+
 
 ## 🚀 Getting Started
 
-### 1. Clone the Repository
+Follow these steps to download, install, and run Smart Internet Connectivity Analyser locally.
+
+### Step 1: Clone the Repository
+
+Open a terminal and run:
 
 ```bash
 git clone https://github.com/saurabhwagh01/smart-connectivity-analyser.git
+```
+
+Move into the project directory:
+
+```bash
 cd smart-connectivity-analyser
 ```
 
-### 2. Create a Virtual Environment
+### Step 2: Create a Python Virtual Environment
 
-**Windows PowerShell:**
+A virtual environment keeps the project's Python dependencies separate from other Python projects.
+
+**Windows (PowerShell):**
+
+Create the virtual environment:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell blocks activation, you can use the environment's Python executable directly:
+Use the virtual environment's Python executable directly for all subsequent Python commands. Activation is not required.
+
+**macOS / Linux:**
+
+Create the environment:
+
+```bash
+python3 -m venv .venv
+```
+
+Activate it:
+
+```bash
+source .venv/bin/activate
+```
+
+### Step 3: Install Project Dependencies
+
+Make sure you are in the project root directory.
+
+**Windows (PowerShell):**
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 **macOS / Linux:**
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 3. Install Dependencies
-
-Run from the project root:
-
-```bash
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-### 4. Run the Backend
+Wait until the installation completes successfully.
 
-From the project root:
+### Step 4: Start the FastAPI Backend
+
+From the project root directory, run:
+
+**Windows (PowerShell):**
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+```
+
+**macOS / Linux:**
 
 ```bash
 python -m uvicorn backend.main:app --reload
 ```
 
-The backend API should be available at:
+The backend development server should start at:
 
-- **API health check:** http://127.0.0.1:8000/api/health
-- **Interactive API documentation:** http://127.0.0.1:8000/docs
+`http://127.0.0.1:8000`
 
-The root address `http://127.0.0.1:8000/` is an application page only if the backend is configured to serve one.
+This is the backend server's root address.
+Keep this terminal open while using the application.
 
-### 5. Open the Frontend
+### Step 5: Check the Backend API
 
-If you use the VS Code Live Server extension, open `index.html` with Live Server. Alternatively, use the static web server configured for your project.
+Open your browser and visit the following addresses:
 
-Make sure the frontend's API configuration points to the local FastAPI backend. Live Server may use a different port from the backend.
+- **API Health Check:** [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+- **Interactive API Documentation:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-**AI models:** AI features may require the expected model files and enough complete network records. Check the AI status endpoint if predictions or anomaly analysis are unavailable.
+The health endpoint can be used to check whether the backend is responding.
+
+The `/docs` page allows you to explore and test the available API endpoints.
+
+**Note:** The backend server runs at `http://127.0.0.1:8000`, while its API endpoints use the `/api` prefix.
+
+### Step 6: Open the Frontend
+
+The frontend is available through the root `index.html` file.
+
+Using Visual Studio Code Live Server:
+
+1. Open the project folder in Visual Studio Code.
+2. Open `index.html`.
+3. Right-click inside the editor.
+4. Select **Open with Live Server**.
+5. The frontend will open in your default browser.
+
+Make sure the frontend's API configuration points to the local FastAPI API base URL:
+
+`http://127.0.0.1:8000/api`
+
+This is the API base URL used by the frontend to communicate with the backend.
+
+### Step 7: Verify Frontend and Backend Connectivity
+
+After starting the backend and opening the frontend:
+
+1. Make sure the FastAPI backend is running.
+2. Open the frontend in your browser using Live Server.
+3. Run a network test through the application.
+4. Check whether the frontend successfully retrieves and displays the available results.
+5. If the frontend cannot communicate with the backend, open your browser's Developer Tools and check the Console and Network tabs for errors.
+
+### Step 8: Check AI Feature Availability
+
+Some AI features depend on trained model files and sufficient complete network test records.
+
+If predictions or anomaly analysis are unavailable, check the AI status endpoint:
+
+```text
+http://127.0.0.1:8000/api/ai/status
+```
+
+AI results are experimental and may not be available until the required data and model files are present.
+
+
+## 🛠️ Troubleshooting
+
+If you encounter problems while setting up or running the project, try the following solutions.
+
+### Python is not recognized
+
+- Make sure Python is installed.
+- On Windows, try checking the installation with:
+
+```powershell
+py --version
+```
+
+- If Python is installed but not recognized, check that it is added to your system PATH.
+
+### Dependency installation fails
+
+- Make sure you are running commands from the project root directory.
+- Check that your Python version is compatible with the dependencies in `requirements.txt`.
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+macOS / Linux:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Backend server does not start
+
+- Make sure you are in the project root directory.
+- Confirm that the required dependencies are installed.
+- Check whether port `8000` is already being used by another process.
+- Stop the running backend server by pressing `Ctrl + C` in its terminal.
+- Restart the backend using the appropriate command for your operating system.
+
+- macOS / Linux:
+
+  ```bash
+  python -m uvicorn backend.main:app --reload
+  ```
+
+- Windows (PowerShell):
+
+  ```powershell
+  .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+  ```
+
+### Frontend cannot connect to the backend
+
+- Make sure the FastAPI backend is running.
+- Confirm that the frontend API configuration points to `http://127.0.0.1:8000/api`.
+- Check your browser's developer tools for errors in the Console and Network tabs.
+
+### AI features are unavailable
+
+- Check whether the required model files are present.
+- Make sure the application has sufficient connectivity records for analysis.
+- Check the AI status endpoint at `http://127.0.0.1:8000/api/ai/status`.
+- Review the backend terminal output for additional error messages.
 
 ## 🔌 API Endpoints
 
@@ -218,59 +381,25 @@ The detector has not yet been fully validated against labelled normal and anomal
 
 ## 🧪 Testing and Verification
 
-Run the automated API tests:
+### Python API Tests
+
+Run the automated API tests.
+
+**Windows (PowerShell):**
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest tests
+```
+
+**macOS / Linux:**
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest tests
 ```
 
-Before submitting a change, where applicable:
-
-- Start the backend and check `/api/health`.
-- Verify that network test records can be saved and retrieved.
-- Check that historical charts display available records.
-- Test AI endpoints with enough complete records.
-- Confirm that unavailable measurements are not silently treated as real zero values.
-- Check browser developer tools and backend output for errors.
-
-### Running Automated Tests
-
-#### Frontend Network Metric Formatting Tests
-
-The repository includes test suites verifying that:
-- Supported network metrics (download, upload, ping, jitter, packet loss) format correctly with units.
-- Missing or unavailable values (`null`, `undefined`, `NaN`, empty strings) are consistently rendered as `"Unavailable"` or `"--"`.
-- Valid zero values (e.g. `0.0 Mbps`, `0.0 ms`, and `0.0 %` packet loss) are displayed correctly.
-- Unavailable values are never incorrectly displayed as zero.
-
-To run the frontend test suite:
-
-```bash
-npm test
-```
-
-Alternatively, run Node's built-in test runner directly:
-
-```bash
-node --test
-```
-
-Or run the specific test file:
-
-```bash
-node tests/metric_formatting.test.js
-```
-
-You can also run the suite using pytest:
-
-```bash
-pytest tests/test_frontend_metric_formatting.py
-```
-
-For research or performance claims, evaluate models using a reproducible test split and compare them with suitable baseline methods. Report the metrics actually obtained; do not claim accuracy or anomaly-detection performance that has not been demonstrated.
-
-### Running Tests
+### JavaScript Tests
 
 The connectivity score calculation (`js/connectivity-score.js`) has automated tests that use Node's built-in test runner, so no packages need to be installed. Node.js 18 or newer is required.
 
@@ -285,6 +414,19 @@ On Node.js 22 or newer, pass the test file instead, because the directory form i
 ```bash
 node --test tests/connectivity-score.test.js
 ```
+
+### Verification Checklist
+
+Before submitting a change, where applicable:
+
+- Start the backend and check `/api/health`.
+- Verify that network test records can be saved and retrieved.
+- Check that historical charts display available records.
+- Test AI endpoints with enough complete records.
+- Confirm that unavailable measurements are not silently treated as real zero values.
+- Check browser developer tools and backend output for errors.
+
+For research or performance claims, evaluate models using a reproducible test split and compare them with suitable baseline methods. Report the metrics actually obtained; do not claim accuracy or anomaly-detection performance that has not been demonstrated.
 
 ## 📁 Project Structure
 
