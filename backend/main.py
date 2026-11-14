@@ -1474,21 +1474,90 @@ def ai_anomaly():
 # COMBINED AI ANALYSIS
 # ============================================================
 
-@app.get("/api/ai/analyze")
-def ai_analyze():
-    if not AI_MODELS_READY:
+def _run_ai_analysis(component_name, analysis):
+    """Run one AI component without interrupting the other."""
+    try:
+        result = analysis()
+        # Keep the original successful payload fields at their existing
+        # top-level locations while adding a normalized result envelope.
+        payload = result if isinstance(result, dict) else {"result": result}
+        return {
+            **payload,
+            "success": True,
+            "data": result,
+            "error": None,
+        }
+    except HTTPException as error:
+        unavailable = error.status_code == 503 or error.status_code < 500
+        if error.status_code == 503:
+            message = "The AI analysis component is currently unavailable."
+        elif error.status_code >= 500:
+            # Server-side exception details can contain paths or other internals.
+            message = (
+                "The analysis could not be completed due to an internal error."
+            )
+        else:
+            message = (
+                error.detail
+                if isinstance(error.detail, str)
+                else "The analysis could not be completed."
+            )
+
         return {
             "success": False,
-            "available": False,
-            "message": AI_MODELS_MESSAGE,
-            "prediction": None,
-            "anomaly": None,
+            "data": None,
+            "error": {
+                "code": (
+                    "analysis_unavailable"
+                    if unavailable
+                    else "analysis_failed"
+                ),
+                "message": message,
+                "status_code": error.status_code,
+            },
+        }
+    except Exception:
+        # Avoid exposing implementation details in the public API response.
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Unexpected %s analysis failure", component_name
+        )
+        return {
+            "success": False,
+            "data": None,
+            "error": {
+                "code": "analysis_failed",
+                "message": "The analysis could not be completed due to an internal error.",
+                "status_code": 500,
+            },
         }
 
+
+@app.get("/api/ai/analyze")
+def ai_analyze():
+    """Return independent prediction and anomaly outcomes."""
+    prediction_result = _run_ai_analysis("prediction", ai_prediction)
+    anomaly_result = _run_ai_analysis("anomaly", ai_anomaly)
+
+    successful_count = sum(
+        result["success"]
+        for result in (prediction_result, anomaly_result)
+    )
+
+    if successful_count == 2:
+        status = "success"
+    elif successful_count == 1:
+        status = "partial_success"
+    else:
+        status = "failure"
+
     return {
-        "success": True,
-        "prediction": ai_prediction(),
-        "anomaly": ai_anomaly(),
+        "success": successful_count == 2,
+        "available": successful_count > 0,
+        "status": status,
+        "prediction": prediction_result,
+        "anomaly": anomaly_result,
     }
 
 
