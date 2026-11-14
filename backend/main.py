@@ -24,6 +24,7 @@ import json
 import math
 import sys
 
+import platform
 import subprocess
 
 import re
@@ -578,12 +579,79 @@ def ping():
 
 
 
+# ============================================================
+# PING OUTPUT PARSING
+# ============================================================
+
+# Matches one reply's round-trip time on Windows ("time=12ms",
+# "time<1ms") and Linux/macOS ("time=12.4 ms").
+PING_TIME_PATTERN = re.compile(
+    r"time[=<]\s*(\d+(?:\.\d+)?)\s*ms",
+    re.IGNORECASE,
+)
+
+# Matches the packet-loss summary on Windows ("(0% loss)"),
+# Linux ("25% packet loss") and macOS ("0.0% packet loss").
+PACKET_LOSS_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)%\s*(?:packet\s+)?loss",
+    re.IGNORECASE,
+)
+
+
+def parse_ping_output(output):
+    """Return (ping_times_ms, packet_loss_percent) from ping output.
+
+    packet_loss_percent is None when no loss summary is found.
+    """
+    ping_times = [
+        float(value)
+        for value in PING_TIME_PATTERN.findall(output)
+    ]
+
+    loss_match = PACKET_LOSS_PATTERN.search(output)
+    packet_loss = float(loss_match.group(1)) if loss_match else None
+
+    return ping_times, packet_loss
+
+
+def build_ping_command(target, packet_count, timeout_seconds, system):
+    """Return the ping command for the given operating system.
+
+    system is a platform.system() value: "Windows", "Linux" or
+    "Darwin" (macOS). The target goes last, because macOS stops
+    reading options at the first non-option argument.
+    """
+    if system == "Windows":
+        # -n: number of pings, -w: reply timeout in milliseconds.
+        return [
+            "ping",
+            "-n", str(packet_count),
+            "-w", str(timeout_seconds * 1000),
+            target,
+        ]
+
+    if system == "Darwin":
+        # -c: number of pings, -W: reply timeout in milliseconds.
+        return [
+            "ping",
+            "-c", str(packet_count),
+            "-W", str(timeout_seconds * 1000),
+            target,
+        ]
+
+    # Linux and other Unix-like systems.
+    # -c: number of pings, -W: reply timeout in seconds.
+    return [
+        "ping",
+        "-c", str(packet_count),
+        "-W", str(timeout_seconds),
+        target,
+    ]
+
 
 # ============================================================
 
 # NETWORK QUALITY
-
-# WINDOWS PING
 
 # ============================================================
 
@@ -603,25 +671,14 @@ def network_quality():
 
 
 
-    timeout_ms = 2000
+    timeout_seconds = 2
 
-
-
-    command = [
-
-        "ping",
-
+    command = build_ping_command(
         target,
-
-        "-n",
-
-        str(packet_count),
-
-        "-w",
-
-        str(timeout_ms)
-
-    ]
+        packet_count,
+        timeout_seconds,
+        platform.system(),
+    )
 
 
 
@@ -646,6 +703,12 @@ def network_quality():
         output = process.stdout
 
 
+
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail="The ping command is not available on this server.",
+        )
 
     except subprocess.TimeoutExpired:
 
@@ -676,117 +739,34 @@ def network_quality():
 
 
 
-
+    # ========================================================
+    # PARSE PING TIMES AND PACKET LOSS
     # ========================================================
 
-    # PARSE INDIVIDUAL PING TIMES
+    ping_times, packet_loss = parse_ping_output(output)
 
-    # ========================================================
-
-
-
-    ping_times = []
-
-
-
-    matches = re.findall(
-
-        r"time[=<]\s*(\d+)\s*ms",
-
-        output,
-
-        re.IGNORECASE
-
-    )
-
-
-
-
-
-    for match in matches:
-
-
-
-        try:
-
-
-
-            ping_times.append(
-
-                float(match)
-
-            )
-
-
-
-        except ValueError:
-
-            pass
-
-
-
-
-
-    # ========================================================
-
-    # PACKET LOSS
-
-    # ========================================================
-
-
-
-    loss_match = re.search(
-
-        r"\((\d+)%\s*loss\)",
-
-        output,
-
-        re.IGNORECASE
-
-    )
-
-
-
-
-
-    if loss_match:
-
-
-
-        packet_loss = float(
-
-            loss_match.group(1)
-
+    # No replies and no loss summary means ping failed to run
+    # (for example, no permission to send pings). That is not
+    # the same as a real 100% packet loss.
+    if not ping_times and packet_loss is None:
+        reason = process.stderr.strip() or "ping produced no output"
+        raise HTTPException(
+            status_code=503,
+            detail=f"Ping measurement failed: {reason}",
         )
 
 
-
-    else:
-
-
-
+    # If ping printed no loss summary, estimate it from
+    # how many replies were received.
+    if packet_loss is None:
         packet_loss = (
-
-            (
-
-                packet_count -
-
-                len(ping_times)
-
-            )
-
+            (packet_count - len(ping_times))
             / packet_count
-
         ) * 100
 
 
-
-
-
     # ========================================================
-
     # NO RESPONSE
-
     # ========================================================
 
 
