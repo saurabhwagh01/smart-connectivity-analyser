@@ -189,6 +189,9 @@ AI_MODEL_DIR = BASE_DIR / "backend" / "models"
 AI_PREDICTION_MODEL_PATH = AI_MODEL_DIR / "connectivity_predictor.pt"
 AI_ANOMALY_MODEL_PATH = AI_MODEL_DIR / "anomaly_autoencoder.pt"
 AI_SCALER_PATH = AI_MODEL_DIR / "scaler.json"
+AI_ANOMALY_CALIBRATION_PATH = (
+    AI_MODEL_DIR / "anomaly_calibration.json"
+)
 
 ai_prediction_model = None
 ai_anomaly_model = None
@@ -208,15 +211,34 @@ def load_ai_models():
     required = [
         AI_ANOMALY_MODEL_PATH,
         AI_SCALER_PATH,
+        AI_ANOMALY_CALIBRATION_PATH,
     ]
 
     missing = [str(path) for path in required if not path.exists()]
     if missing:
-        return False, f"Missing AI files: {', '.join(missing)}"
+        return False, (
+            f"Missing AI files: {', '.join(missing)}. "
+            "Retrain the anomaly model to generate calibration."
+        )
 
     try:
         with open(AI_SCALER_PATH, "r", encoding="utf-8") as file:
             ai_scaler = json.load(file)
+
+        with open(
+            AI_ANOMALY_CALIBRATION_PATH,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            calibration = json.load(file)
+
+        threshold = float(calibration["threshold"])
+
+        if not math.isfinite(threshold) or threshold < 0:
+            raise ValueError("Invalid calibrated anomaly threshold.")
+
+        if calibration.get("strategy") not in ("percentile", "mean_std"):
+            raise ValueError("Unknown anomaly calibration strategy.")
 
         ai_anomaly_model = TransformerAutoencoder()
         ai_anomaly_model.load_state_dict(
@@ -228,39 +250,13 @@ def load_ai_models():
         )
         ai_anomaly_model.eval()
 
-        # Establish an anomaly threshold from reconstruction errors
-        # on the same real measurements used during training.
-        data = load_network_data()
-        errors = []
+        # Use the persisted validation-based threshold.
+        # Never recalibrate using live database records.
+        ai_anomaly_threshold = threshold
 
-        with torch.no_grad():
-            for item in data:
-                normalized = normalize_values(item["values"], ai_scaler)
-                sample = torch.tensor(
-                    normalized,
-                    dtype=torch.float32,
-                ).reshape(1, 1, len(FEATURES))
-
-                reconstructed = ai_anomaly_model(sample)
-                target = sample[:, -1, :]
-                error_value = torch.mean(
-                    (reconstructed - target) ** 2
-                ).item()
-                errors.append(error_value)
-
-        if errors:
-            mean_error = sum(errors) / len(errors)
-            variance = sum(
-                (value - mean_error) ** 2
-                for value in errors
-            ) / len(errors)
-            ai_anomaly_threshold = (
-                mean_error + 2.0 * math.sqrt(variance)
-            )
-        else:
-            ai_anomaly_threshold = 0.05
-
-        return True, "AI anomaly model and final prediction model loaded successfully."
+        return True, (
+            "AI anomaly model and calibrated threshold loaded successfully."
+        )
 
     except Exception as error:
         ai_prediction_model = None
@@ -1442,7 +1438,20 @@ def ai_anomaly():
                 (reconstructed - target) ** 2
             ).item()
 
-        threshold = float(ai_anomaly_threshold or 0.05)
+            if ai_anomaly_threshold is None:
+             raise HTTPException(
+                 status_code=503,
+                detail="Anomaly threshold is not calibrated. Retrain the anomaly model.",
+            )
+
+        threshold = float(ai_anomaly_threshold)
+
+        if not math.isfinite(threshold) or threshold < 0:
+            raise HTTPException(
+                status_code=503,
+                detail="Invalid anomaly calibration threshold.",
+            )
+
         is_anomaly = reconstruction_error > threshold
 
         return {
@@ -1462,6 +1471,8 @@ def ai_anomaly():
             ),
         }
 
+    except HTTPException:
+        raise
     except Exception as error:
         raise HTTPException(
             status_code=500,
