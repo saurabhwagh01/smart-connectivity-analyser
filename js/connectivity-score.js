@@ -3,7 +3,27 @@
    Pure functions shared by the browser and Node tests
    ========================================================= */
 
+/*
+   Only finite, non-negative numbers are scored.
+   Anything else (null, undefined, NaN, strings, negatives)
+   is treated as a missing measurement.
+*/
+
+function isValidMetric(value) {
+    return (
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        value >= 0
+    );
+}
+
+
 function calculateConnectivityScore(metrics) {
+
+    if (!metrics) {
+        return 0;
+    }
+
 
     let score = 0;
 
@@ -16,7 +36,7 @@ function calculateConnectivityScore(metrics) {
         metrics.download;
 
 
-    if (download !== null) {
+    if (isValidMetric(download)) {
 
         if (download >= 100) {
             score += 30;
@@ -60,7 +80,7 @@ function calculateConnectivityScore(metrics) {
         metrics.upload;
 
 
-    if (upload !== null) {
+    if (isValidMetric(upload)) {
 
         if (upload >= 50) {
             score += 20;
@@ -100,7 +120,7 @@ function calculateConnectivityScore(metrics) {
         metrics.ping;
 
 
-    if (ping !== null) {
+    if (isValidMetric(ping)) {
 
         if (ping <= 20) {
             score += 20;
@@ -144,7 +164,7 @@ function calculateConnectivityScore(metrics) {
         metrics.jitter;
 
 
-    if (jitter !== null) {
+    if (isValidMetric(jitter)) {
 
         if (jitter <= 5) {
             score += 20;
@@ -184,7 +204,7 @@ function calculateConnectivityScore(metrics) {
         metrics.packetLoss;
 
 
-    if (packetLoss !== null) {
+    if (isValidMetric(packetLoss)) {
 
         if (packetLoss <= 0.5) {
             score += 10;
@@ -250,6 +270,7 @@ function getConnectivityStatus(score) {
 
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {
+        isValidMetric,
         calculateConnectivityScore,
         getConnectivityStatus
     };

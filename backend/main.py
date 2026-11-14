@@ -1,11 +1,21 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+
+from fastapi.encoders import jsonable_encoder
+
+from fastapi.exceptions import RequestValidationError
 
 from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from pydantic import BaseModel
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from pathlib import Path
 
@@ -19,7 +29,7 @@ import subprocess
 import re
 
 import statistics
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 # ============================================================
 # AI MODEL IMPORTS
@@ -47,6 +57,15 @@ try:
 except Exception as error:
     torch = None
     AI_IMPORT_ERROR = str(error)
+    FEATURES = ()
+    SEQUENCE_LENGTH = 8
+    ConnectivityPredictor = None
+    TransformerAutoencoder = None
+    load_network_data = lambda: []
+    normalize_values = None
+    denormalize_value = None
+    final_predictor = None
+    FINAL_PREDICTOR_READY = False
 else:
     AI_IMPORT_ERROR = None
 
@@ -88,6 +107,35 @@ app.add_middleware(
     allow_headers=["*"],
 
 )
+
+
+
+# ============================================================
+# VALIDATION ERRORS
+# ============================================================
+
+def make_json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {key: make_json_safe(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [make_json_safe(item) for item in value]
+
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    # Same response as FastAPI's default handler. Rejected NaN or
+    # Infinity inputs are echoed as strings, since they cannot be
+    # encoded as JSON and would otherwise cause a 500 error.
+    return JSONResponse(
+        status_code=422,
+        content={"detail": make_json_safe(jsonable_encoder(exc.errors()))},
+    )
 
 
 
@@ -326,7 +374,6 @@ def initialize_database():
 
 
 initialize_database()
-from backend.final_predictor import final_predictor, FINAL_PREDICTOR_READY
 AI_MODELS_READY, AI_MODELS_MESSAGE = load_ai_models()
 
 
@@ -340,7 +387,21 @@ AI_MODELS_READY, AI_MODELS_MESSAGE = load_ai_models()
 
 
 
+MEASUREMENT_FIELDS = (
+    "download_mbps",
+    "upload_mbps",
+    "ping_ms",
+    "jitter_ms",
+    "packet_loss",
+    "connectivity_score",
+)
+
+
 class NetworkTest(BaseModel):
+
+    # Reject NaN and Infinity. They cannot be stored or returned
+    # as valid JSON, and would break /api/network-history.
+    model_config = ConfigDict(allow_inf_nan=False)
 
 
 
@@ -348,39 +409,89 @@ class NetworkTest(BaseModel):
 
 
 
-    download_mbps: float | None = None
+    download_mbps: float | None = Field(default=None, ge=0)
 
 
 
-    upload_mbps: float | None = None
+    upload_mbps: float | None = Field(default=None, ge=0)
 
 
 
-    ping_ms: float | None = None
+    ping_ms: float | None = Field(default=None, ge=0)
 
 
 
-    jitter_ms: float | None = None
+    jitter_ms: float | None = Field(default=None, ge=0)
 
 
 
-    packet_loss: float | None = None
+    packet_loss: float | None = Field(default=None, ge=0, le=100)
 
 
 
-    network_type: str | None = "Unknown"
+    network_type: str | None = Field(default="Unknown", max_length=50)
 
 
 
-    connectivity_score: float | None = None
+    connectivity_score: float | None = Field(default=None, ge=0, le=100)
 
 
 
-    latitude: float | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
 
 
 
-    longitude: float | None = None
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+
+
+
+    # Pydantic would otherwise store true/false as 1.0/0.0.
+    @field_validator(
+        *MEASUREMENT_FIELDS,
+        "latitude",
+        "longitude",
+        mode="before",
+    )
+    @classmethod
+    def reject_boolean_values(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("Input should be a number, not a boolean")
+
+        return value
+
+
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, value):
+        if value is None or not value.strip():
+            return None
+
+        try:
+            # Python < 3.11 does not accept a trailing "Z".
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(
+                "timestamp must be an ISO 8601 date-time string"
+            )
+
+        # Keep the original string so stored values are unchanged.
+        return value
+
+
+    @model_validator(mode="after")
+    def validate_record(self):
+        if all(getattr(self, field) is None for field in MEASUREMENT_FIELDS):
+            raise ValueError(
+                "At least one network measurement is required: "
+                + ", ".join(MEASUREMENT_FIELDS)
+            )
+
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError(
+                "latitude and longitude must be provided together"
+            )
+
+        return self
 
 
 
@@ -1099,165 +1210,123 @@ def save_network_test(data: NetworkTest):
 # ============================================================
 
 
+HISTORY_RANGE_WINDOWS = {
+    "1h": timedelta(hours=1),
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "recent": timedelta(days=1),
+    # Preserve existing API range values for compatibility.
+    "hourly": timedelta(hours=24),
+    "daily": timedelta(days=7),
+    "weekly": timedelta(days=30),
+    "monthly": timedelta(days=365),
+}
+
 
 @app.get("/api/network-history")
-
 def get_network_history(
-
-    range: str = "recent"
-
+    range: str = "recent",
+    start_date: date | None = None,
+    end_date: date | None = None,
+    min_score: float | None = Query(default=None, ge=0, le=100),
+    max_score: float | None = Query(default=None, ge=0, le=100),
 ):
+    if range != "all" and range not in HISTORY_RANGE_WINDOWS:
+        supported = ", ".join(["all", *HISTORY_RANGE_WINDOWS])
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported range '{range}'. Supported values: {supported}",
+        )
 
+    # Validate date range.
+    if (
+        start_date is not None
+        and end_date is not None
+        and start_date > end_date
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="start_date must be on or before end_date",
+        )
 
+    # Validate connectivity score range.
+    if (
+        min_score is not None
+        and max_score is not None
+        and min_score > max_score
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="min_score must be less than or equal to max_score",
+        )
 
     connection = get_connection()
 
+    try:
+        cursor = connection.cursor()
+
+        conditions = []
+        parameters = []
+
+        # Preserve the existing time-range behaviour
+        # whenever a custom date range is not supplied.
+        if start_date is None and end_date is None:
+            if range != "all":
+                duration = HISTORY_RANGE_WINDOWS[range]
+                since = datetime.now() - duration
+                conditions.append("timestamp >= ?")
+                parameters.append(since.isoformat())
 
 
-    cursor = connection.cursor()
+        else:
+            if start_date is not None:
+                conditions.append("timestamp >= ?")
+                parameters.append(start_date.isoformat())
 
+            if end_date is not None:
+                # Exclusive upper boundary includes the entire end date.
+                end_exclusive = end_date + timedelta(days=1)
 
+                conditions.append("timestamp < ?")
+                parameters.append(end_exclusive.isoformat())
 
+        if min_score is not None:
+            conditions.append("connectivity_score >= ?")
+            parameters.append(min_score)
 
+        if max_score is not None:
+            conditions.append("connectivity_score <= ?")
+            parameters.append(max_score)
 
-    if range == "hourly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            hours=24
-
-        )
-
-
-
-    elif range == "daily":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=7
-
-        )
-
-
-
-    elif range == "weekly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=30
-
-        )
-
-
-
-    elif range == "monthly":
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=365
-
-        )
-
-
-
-    else:
-
-
-
-        since = datetime.now() - timedelta(
-
-            days=1
-
-        )
-
-
-
-
-
-    cursor.execute(
-
+        query = """
+             SELECT
+                id,
+                timestamp,
+                download_mbps,
+                upload_mbps,
+                ping_ms,
+                jitter_ms,
+                packet_loss,
+                network_type,
+                connectivity_score,
+                latitude,
+                longitude
+            FROM network_tests
         """
 
-        SELECT
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
 
-            id,
+        query += " ORDER BY timestamp ASC"
 
-            timestamp,
+        cursor.execute(query, parameters)
 
-            download_mbps,
+        rows = cursor.fetchall()
 
-            upload_mbps,
+        return [dict(row) for row in rows]
 
-            ping_ms,
-
-            jitter_ms,
-
-            packet_loss,
-
-            network_type,
-
-            connectivity_score,
-
-            latitude,
-
-            longitude
-
-
-
-        FROM network_tests
-
-
-
-        WHERE timestamp >= ?
-
-
-
-        ORDER BY timestamp ASC
-
-        """,
-
-
-
-        (
-
-            since.isoformat(),
-
-        )
-
-    )
-
-
-
-
-
-    rows = cursor.fetchall()
-
-
-
-    connection.close()
-
-
-
-
-
-    return [
-
-        dict(row)
-
-        for row in rows
-
-    ]
-
-
-
+    finally:
+        connection.close()
 
 
 
@@ -1294,7 +1363,7 @@ def ai_prediction():
     if not FINAL_PREDICTOR_READY:
         raise HTTPException(
             status_code=503,
-            detail=final_predictor.message,
+            detail=getattr(final_predictor, "message", AI_MODELS_MESSAGE),
         )
 
     try:
@@ -1406,6 +1475,15 @@ def ai_anomaly():
 
 @app.get("/api/ai/analyze")
 def ai_analyze():
+    if not AI_MODELS_READY:
+        return {
+            "success": False,
+            "available": False,
+            "message": AI_MODELS_MESSAGE,
+            "prediction": None,
+            "anomaly": None,
+        }
+
     return {
         "success": True,
         "prediction": ai_prediction(),

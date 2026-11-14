@@ -15,7 +15,19 @@ import sqlite3
 from pathlib import Path
 
 import numpy as np
-from sklearn.ensemble import HistGradientBoostingRegressor
+
+if __package__:
+    from .model_config import (
+        build_production_prediction_model,
+        constrain_connectivity_predictions,
+        is_valid_measurement_row,
+    )
+else:  # Support importing final_predictor directly from backend/.
+    from model_config import (
+        build_production_prediction_model,
+        constrain_connectivity_predictions,
+        is_valid_measurement_row,
+    )
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,7 +43,6 @@ FEATURES = [
 ]
 
 SEQUENCE_LENGTH = 8
-RANDOM_STATE = 42
 
 
 class FinalConnectivityPredictor:
@@ -52,9 +63,9 @@ class FinalConnectivityPredictor:
             try:
                 rows = connection.execute(
                     f"""
-                    SELECT {", ".join(FEATURES)}
+                    SELECT timestamp, {", ".join(FEATURES)}
                     FROM network_tests
-                    ORDER BY timestamp ASC
+                    ORDER BY timestamp ASC, id ASC
                     """
                 ).fetchall()
 
@@ -75,6 +86,9 @@ class FinalConnectivityPredictor:
         data = []
 
         for row in rows:
+            if row["timestamp"] is None:
+                continue
+
             raw = [row[column] for column in FEATURES]
 
             if any(value is None for value in raw):
@@ -85,7 +99,7 @@ class FinalConnectivityPredictor:
             except (TypeError, ValueError):
                 continue
 
-            if not all(np.isfinite(values)):
+            if not is_valid_measurement_row(values):
                 continue
 
             data.append(values)
@@ -130,13 +144,7 @@ class FinalConnectivityPredictor:
 
         X, y = self._build_dataset(data)
 
-        self.model = HistGradientBoostingRegressor(
-            max_iter=300,
-            learning_rate=0.05,
-            max_leaf_nodes=15,
-            l2_regularization=0.1,
-            random_state=RANDOM_STATE,
-        )
+        self.model = build_production_prediction_model()
 
         self.model.fit(X, y)
 
@@ -163,11 +171,8 @@ class FinalConnectivityPredictor:
         latest_window = data[-SEQUENCE_LENGTH:]
         X = latest_window.reshape(1, -1)
 
-        prediction = float(self.model.predict(X)[0])
-
-        prediction = max(
-            0.0,
-            min(100.0, prediction),
+        prediction = float(
+            constrain_connectivity_predictions(self.model.predict(X))[0]
         )
 
         return prediction

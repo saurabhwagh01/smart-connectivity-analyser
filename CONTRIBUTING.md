@@ -116,9 +116,25 @@ Before submitting a pull request:
 2. Test the functionality affected by your changes.
 3. Check for errors in the browser console and backend terminal.
 4. Verify that existing features still work.
-5. Include relevant test results or explain any tests you could not run.
+5. Run the automated test suites and include relevant test results.
 
 Do not claim that a test passed unless you actually ran it.
+
+### Running Automated Tests
+
+Run the automated test suite before submitting changes:
+
+```bash
+npm test
+```
+
+Alternatively, run Node's built-in test runner directly:
+
+```bash
+node --test
+```
+
+For additional test options and instructions, see the [README.md](README.md#running-automated-tests).
 
 ### Testing Machine-Learning Features
 
