@@ -22,6 +22,8 @@ from ai_engine import (
     SEQUENCE_LENGTH,
     ConnectivityPredictor,
     TransformerAutoencoder,
+    compare_anomaly_thresholds,
+    summarize_reconstruction_errors,
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -446,87 +448,91 @@ def main():
     print()
     print("Training temporary Transformer Autoencoder...")
 
-    anomaly_model, anomaly_scaler = (
-        train_anomaly_model(train_data)
+    # Keep the final 20% completely unseen until testing.
+    # Split the first 80% into 75% training and 25% validation.
+    anomaly_train_count = int(len(train_data) * 0.75)
+
+    anomaly_train_data = train_data[:anomaly_train_count]
+    validation_data = train_data[anomaly_train_count:]
+
+    if len(anomaly_train_data) <= SEQUENCE_LENGTH:
+        raise RuntimeError("Anomaly training portion is too small.")
+
+    if not validation_data or not test_data:
+        raise RuntimeError("Validation and test portions must not be empty.")
+
+    anomaly_model, anomaly_scaler = train_anomaly_model(
+        anomaly_train_data
     )
 
-    train_errors = reconstruction_errors(
-        anomaly_model,
-        anomaly_scaler,
-        train_data
+    validation_errors = reconstruction_errors(
+        anomaly_model, anomaly_scaler, validation_data
     )
 
     test_errors = reconstruction_errors(
-        anomaly_model,
-        anomaly_scaler,
-        test_data
+        anomaly_model, anomaly_scaler, test_data
     )
 
-    sorted_errors = sorted(train_errors)
+    # Calibrate exclusively on validation reconstruction errors.
+    thresholds = compare_anomaly_thresholds(validation_errors)
+    threshold = thresholds["percentile"]
 
-    threshold_index = int(
-        0.95 * (len(sorted_errors) - 1)
+    percentile_anomaly_count = sum(
+        error > thresholds["percentile"] for error in test_errors
+    )
+    mean_std_anomaly_count = sum(
+        error > thresholds["mean_std"] for error in test_errors
     )
 
-    threshold = sorted_errors[
-        threshold_index
-    ]
-
-    anomaly_count = sum(
-        error > threshold
-        for error in test_errors
-    )
-
-    train_average = (
-        sum(train_errors)
-        / len(train_errors)
-    )
-
-    test_average = (
-        sum(test_errors)
-        / len(test_errors)
-    )
-
-    anomaly_rate = (
-        100 * anomaly_count
-        / len(test_errors)
-    )
+    test_average = sum(test_errors) / len(test_errors)
 
     anomaly_metrics = {
-        "training_average_reconstruction_error":
-            round(train_average, 6),
-        "test_average_reconstruction_error":
-            round(test_average, 6),
-        "threshold_95_percentile":
-            round(threshold, 6),
-        "test_records_above_threshold":
-            anomaly_count,
-        "test_anomaly_rate_percent":
-            round(anomaly_rate, 2)
+        "anomaly_training_records": len(anomaly_train_data),
+        "validation_records": len(validation_data),
+        "test_records": len(test_data),
+        "validation_error_summary":
+            summarize_reconstruction_errors(validation_errors),
+        "test_average_reconstruction_error": round(test_average, 6),
+        "threshold_95_percentile": round(thresholds["percentile"], 6),
+        "threshold_mean_plus_2_std": round(thresholds["mean_std"], 6),
+        "threshold_comparison": {
+            "percentile": {
+                "test_records_above_threshold": percentile_anomaly_count,
+                "test_anomaly_rate_percent": round(
+                    100 * percentile_anomaly_count / len(test_errors), 2
+                ),
+            },
+            "mean_std": {
+                "test_records_above_threshold": mean_std_anomaly_count,
+                "test_anomaly_rate_percent": round(
+                    100 * mean_std_anomaly_count / len(test_errors), 2
+                ),
+            },
+        },
+        "selected_strategy": "percentile",
+        "selected_threshold": round(threshold, 6),
     }
 
     print()
     print("ANOMALY RESULTS")
     print("-" * 60)
+    print(f"Anomaly training records: {len(anomaly_train_data)}")
+    print(f"Validation records: {len(validation_data)}")
+    print(f"Unseen test records: {len(test_errors)}")
+    print(f"Validation error summary: {anomaly_metrics['validation_error_summary']}")
+    print(f"95th percentile threshold: {thresholds['percentile']:.6f}")
+    print(f"Mean + 2 std threshold: {thresholds['mean_std']:.6f}")
     print(
-        f"Training average error: "
-        f"{anomaly_metrics['training_average_reconstruction_error']}"
+        f"Test anomalies (percentile): "
+        f"{percentile_anomaly_count}/{len(test_errors)}"
     )
     print(
-        f"Test average error: "
-        f"{anomaly_metrics['test_average_reconstruction_error']}"
+        f"Test anomalies (mean + 2 std): "
+        f"{mean_std_anomaly_count}/{len(test_errors)}"
     )
     print(
-        f"95% threshold: "
-        f"{anomaly_metrics['threshold_95_percentile']}"
-    )
-    print(
-        f"Test records above threshold: "
-        f"{anomaly_count}/{len(test_errors)}"
-    )
-    print(
-        f"Test anomaly rate: "
-        f"{anomaly_metrics['test_anomaly_rate_percent']}%"
+        "Selected test anomaly rate: "
+        f"{anomaly_metrics['threshold_comparison']['percentile']['test_anomaly_rate_percent']}%"
     )
 
     results = {
