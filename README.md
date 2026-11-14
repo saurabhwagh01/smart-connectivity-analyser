@@ -236,7 +236,7 @@ Before submitting a change, where applicable:
 
 ### Running Automated Tests
 
-#### Frontend Network Metric Formatting Tests
+#### Unit Tests (No Playwright Required)
 
 The repository includes test suites verifying that:
 - Supported network metrics (download, upload, ping, jitter, packet loss) format correctly with units.
@@ -252,7 +252,17 @@ npm test
 
 This runs the connectivity score, metric formatting, and history filter suites with Node's built-in test runner. No packages need to be installed. Node.js 18 or newer is required.
 
-Use `npm test` for all dependency-free unit tests.
+To run individual unit-test files from the `tests/` directory:
+
+```bash
+cd tests
+node --test connectivity-score.test.js
+node --test metric_formatting.test.js
+node --test history-filters.test.js
+cd ..
+```
+
+These commands only load the listed unit-test files. They do not load the Playwright-dependent browser scenario.
 
 The metric formatting suite can also be run with pytest:
 

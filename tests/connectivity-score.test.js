@@ -1,6 +1,6 @@
 /* =========================================================
    CONNECTIVITY SCORE TESTS
-   Run with: node --test tests/
+   Run with: npm test
    ========================================================= */
 
 const { describe, test } = require("node:test");

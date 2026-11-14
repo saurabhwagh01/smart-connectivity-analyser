@@ -122,11 +122,15 @@ Do not claim that a test passed unless you actually ran it.
 
 ### Running Automated Tests
 
+#### Unit Tests
+
 Run the dependency-free JavaScript unit tests before submitting changes:
 
 ```bash
 npm test
 ```
+
+#### Browser Tests
 
 The browser scenario tests require Playwright and Chromium:
 
