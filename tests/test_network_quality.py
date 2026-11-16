@@ -3,7 +3,7 @@ import subprocess
 import pytest
 
 import backend.main as main
-from backend.main import build_ping_command, parse_ping_output
+from backend.main import build_ping_command, parse_ping_counts, parse_ping_output
 
 
 # ------------------------------------------------------------
@@ -76,6 +76,28 @@ def test_returns_none_when_loss_line_is_missing():
 
     assert ping_times == []
     assert packet_loss is None
+
+
+def test_parses_ping_counts_windows():
+    sent, recv = parse_ping_counts(WINDOWS_OUTPUT)
+    assert sent == 2
+    assert recv == 2
+
+
+def test_parses_ping_counts_linux():
+    sent, recv = parse_ping_counts(LINUX_OUTPUT)
+    assert sent == 4
+    assert recv == 3
+
+
+def test_calculates_packet_loss_from_sent_and_received_when_percentage_missing():
+    output_without_percent = """
+    Ping statistics for 1.1.1.1:
+        Packets: Sent = 10, Received = 8, Lost = 2
+    """
+    ping_times, packet_loss = parse_ping_output(output_without_percent)
+    assert packet_loss == 20.0
+
 
 
 # ------------------------------------------------------------

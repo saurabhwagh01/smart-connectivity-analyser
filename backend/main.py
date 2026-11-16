@@ -597,11 +597,30 @@ PACKET_LOSS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Matches sent and received packet counts across operating systems:
+# Windows: "Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)"
+# Linux/macOS: "4 packets transmitted, 3 received, 25% packet loss"
+PACKET_COUNTS_PATTERN = re.compile(
+    r"(?:Sent\s*=\s*(\d+),\s*Received\s*=\s*(\d+)|(\d+)\s+packets?\s+transmitted,\s+(\d+)\s+(?:packets?\s+)?received)",
+    re.IGNORECASE,
+)
+
+
+def parse_ping_counts(output):
+    """Return (packets_sent, packets_received) from ping output or (None, None)."""
+    match = PACKET_COUNTS_PATTERN.search(output)
+    if not match:
+        return None, None
+    sent = int(match.group(1) or match.group(3))
+    recv = int(match.group(2) or match.group(4))
+    return sent, recv
+
 
 def parse_ping_output(output):
     """Return (ping_times_ms, packet_loss_percent) from ping output.
 
-    packet_loss_percent is None when no loss summary is found.
+    packet_loss_percent is extracted from the loss summary or calculated
+    from sent and received packet counts. It is None when no summary is found.
     """
     ping_times = [
         float(value)
@@ -610,6 +629,11 @@ def parse_ping_output(output):
 
     loss_match = PACKET_LOSS_PATTERN.search(output)
     packet_loss = float(loss_match.group(1)) if loss_match else None
+
+    # Calculate packet loss from sent and received packets if percentage pattern is absent
+    sent, recv = parse_ping_counts(output)
+    if packet_loss is None and sent is not None and sent > 0 and recv is not None:
+        packet_loss = round(((sent - recv) / sent) * 100.0, 2)
 
     return ping_times, packet_loss
 
@@ -769,21 +793,21 @@ def network_quality():
     # NO RESPONSE
     # ========================================================
 
-
+    sent_count, recv_count = parse_ping_counts(output)
+    actual_sent = sent_count if sent_count is not None else packet_count
+    actual_recv = recv_count if recv_count is not None else len(ping_times)
 
     if len(ping_times) == 0:
-
-
 
         return {
 
             "target": target,
 
-            "packets_sent": packet_count,
+            "packets_sent": actual_sent,
 
             "packets_received": 0,
 
-            "packet_loss": 100.0,
+            "packet_loss": 100.0 if packet_loss is None else round(packet_loss, 2),
 
             "ping_ms": None,
 
@@ -955,15 +979,11 @@ def network_quality():
 
 
 
-        "packets_sent": packet_count,
+        "packets_sent": actual_sent,
 
 
 
-        "packets_received": len(
-
-            ping_times
-
-        ),
+        "packets_received": actual_recv,
 
 
 

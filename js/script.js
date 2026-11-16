@@ -1681,18 +1681,23 @@ async function startNetworkTest() {
 
         if (
             currentMetrics.ping === null ||
-            currentMetrics.jitter === null
+            currentMetrics.jitter === null ||
+            currentMetrics.packetLoss === null
         ) {
             const latency = await measureBrowserLatency();
 
             if (abortTestIfOffline()) return;
 
-            if (currentMetrics.ping === null) {
+            if (currentMetrics.ping === null && latency.ping !== null) {
                 currentMetrics.ping = latency.ping;
             }
 
-            if (currentMetrics.jitter === null) {
+            if (currentMetrics.jitter === null && latency.jitter !== null) {
                 currentMetrics.jitter = latency.jitter;
+            }
+
+            if (currentMetrics.packetLoss === null && latency.packetLoss !== null) {
+                currentMetrics.packetLoss = latency.packetLoss;
             }
         }
 
@@ -2066,10 +2071,11 @@ function applyBandwidthMetrics(result) {
    BROWSER LATENCY
    ========================================================= */
 
-async function measureBrowserLatency() {
+async function measureBrowserLatency(probeCount = 5) {
     const samples = [];
+    const totalProbes = probeCount;
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < totalProbes; i++) {
         const start = performance.now();
 
         try {
@@ -2091,7 +2097,8 @@ async function measureBrowserLatency() {
     if (!samples.length) {
         return {
             ping: null,
-            jitter: null
+            jitter: null,
+            packetLoss: null
         };
     }
 
@@ -2107,9 +2114,13 @@ async function measureBrowserLatency() {
         deviations.reduce((sum, value) => sum + value, 0) /
         deviations.length;
 
+    const lostPackets = totalProbes - samples.length;
+    const packetLoss = Number(((lostPackets / totalProbes) * 100).toFixed(1));
+
     return {
         ping: Number(average.toFixed(2)),
-        jitter: Number(jitter.toFixed(2))
+        jitter: Number(jitter.toFixed(2)),
+        packetLoss: packetLoss
     };
 }
 
@@ -2776,6 +2787,9 @@ if (typeof window !== "undefined") {
 
     window.detectNetworkType =
         detectNetworkType;
+
+    window.measureBrowserLatency =
+        measureBrowserLatency;
 }
 
 /* ─── Node.js Exports for Tests ─────────────────────── */
@@ -2801,7 +2815,8 @@ if (typeof module !== "undefined" && module.exports) {
         loadNetworkHistory,
         smartConnectivity,
         resolveNetworkType,
-        detectNetworkType
+        detectNetworkType,
+        measureBrowserLatency
     };
 }
 /* =========================================================
