@@ -15,6 +15,11 @@ let testInProgress = false;
 let speedTest = null;
 let speedTestTimeout = null;
 let networkChart = null;
+let downloadChart = null;
+let uploadChart = null;
+let pingChart = null;
+let jitterChart = null;
+let packetLossChart = null;
 let connectivityMap = null;
 let userMarker = null;
 let savedMarkers = [];
@@ -496,6 +501,11 @@ function setupNetworkListeners() {
     window.addEventListener("resize", () => {
         connectivityMap?.invalidateSize();
         networkChart?.resize();
+        downloadChart?.resize();
+        uploadChart?.resize();
+        pingChart?.resize();
+        jitterChart?.resize();
+        packetLossChart?.resize();
     });
 
     setInterval(() => {
@@ -1016,6 +1026,64 @@ function bearingToDirection(bearing) {
    CHART.JS
    ========================================================= */
 
+function createMetricHistoryChart(canvasId, label, color, bgColor, unit, yMin = 0, yMax = null) {
+    const canvas = $(canvasId);
+    if (!canvas) return null;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+
+    const yAxisConfig = {
+        type: "linear",
+        position: "left",
+        beginAtZero: true,
+        title: {
+            display: true,
+            text: unit
+        }
+    };
+    if (yMin !== null) yAxisConfig.min = yMin;
+    if (yMax !== null) yAxisConfig.max = yMax;
+
+    return new Chart(context, {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: `${label} (${unit})`,
+                    data: [],
+                    borderColor: color,
+                    backgroundColor: bgColor,
+                    borderWidth: 2.5,
+                    fill: true,
+                    tension: 0.35,
+                    spanGaps: true
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                intersect: false,
+                mode: "index"
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: "bottom"
+                },
+                tooltip: {
+                    enabled: true
+                }
+            },
+            scales: {
+                y: yAxisConfig
+            }
+        }
+    });
+}
+
 function initializeChart() {
     const canvas = $("networkChart");
 
@@ -1035,95 +1103,147 @@ function initializeChart() {
         return;
     }
 
-    if (networkChart) return;
+    if (!networkChart) {
+        const context = canvas.getContext("2d");
 
-    const context = canvas.getContext("2d");
+        if (context) {
+            networkChart = new Chart(context, {
+                type: "line",
 
-    if (!context) return;
+                data: {
+                    labels: [],
 
-    networkChart = new Chart(context, {
-        type: "line",
+                    datasets: [
+                        {
+                            label: "Connectivity Score",
+                            data: [],
+                            borderColor: "#8b5cf6",
+                            backgroundColor: "rgba(139, 92, 246, 0.15)",
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.35,
+                            spanGaps: true,
+                            yAxisID: "scoreAxis"
+                        },
 
-        data: {
-            labels: [],
-
-            datasets: [
-                {
-                    label: "Connectivity Score",
-                    data: [],
-                    borderColor: "#8b5cf6",
-                    backgroundColor: "rgba(139, 92, 246, 0.15)",
-                    borderWidth: 3,
-                    fill: true,
-                    tension: 0.35,
-                    spanGaps: true,
-                    yAxisID: "scoreAxis"
+                        {
+                            label: "Download Speed (Mbps)",
+                            data: [],
+                            borderColor: "#ec4899",
+                            backgroundColor: "rgba(236, 72, 153, 0.10)",
+                            borderWidth: 3,
+                            fill: false,
+                            tension: 0.35,
+                            spanGaps: true,
+                            yAxisID: "speedAxis"
+                        }
+                    ]
                 },
 
-                {
-                    label: "Download Speed (Mbps)",
-                    data: [],
-                    borderColor: "#ec4899",
-                    backgroundColor: "rgba(236, 72, 153, 0.10)",
-                    borderWidth: 3,
-                    fill: false,
-                    tension: 0.35,
-                    spanGaps: true,
-                    yAxisID: "speedAxis"
-                }
-            ]
-        },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
 
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-
-            interaction: {
-                intersect: false,
-                mode: "index"
-            },
-
-            plugins: {
-                legend: {
-                    display: true,
-                    position: "bottom"
-                },
-
-                tooltip: {
-                    enabled: true
-                }
-            },
-
-            scales: {
-                scoreAxis: {
-                    type: "linear",
-                    position: "left",
-                    min: 0,
-                    max: 100,
-
-                    title: {
-                        display: true,
-                        text: "Connectivity Score"
-                    }
-                },
-
-                speedAxis: {
-                    type: "linear",
-                    position: "right",
-                    beginAtZero: true,
-
-                    title: {
-                        display: true,
-                        text: "Download Mbps"
+                    interaction: {
+                        intersect: false,
+                        mode: "index"
                     },
 
-                    grid: {
-                        drawOnChartArea: false
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: "bottom"
+                        },
+
+                        tooltip: {
+                            enabled: true
+                        }
+                    },
+
+                    scales: {
+                        scoreAxis: {
+                            type: "linear",
+                            position: "left",
+                            min: 0,
+                            max: 100,
+
+                            title: {
+                                display: true,
+                                text: "Connectivity Score"
+                            }
+                        },
+
+                        speedAxis: {
+                            type: "linear",
+                            position: "right",
+                            beginAtZero: true,
+
+                            title: {
+                                display: true,
+                                text: "Download Mbps"
+                            },
+
+                            grid: {
+                                drawOnChartArea: false
+                            }
+                        }
                     }
                 }
-            }
+            });
         }
-    });
+    }
+
+    if (!downloadChart) {
+        downloadChart = createMetricHistoryChart(
+            "downloadChart",
+            "Download Speed",
+            "#ec4899",
+            "rgba(236, 72, 153, 0.12)",
+            "Mbps"
+        );
+    }
+
+    if (!uploadChart) {
+        uploadChart = createMetricHistoryChart(
+            "uploadChart",
+            "Upload Speed",
+            "#3b82f6",
+            "rgba(59, 130, 246, 0.12)",
+            "Mbps"
+        );
+    }
+
+    if (!pingChart) {
+        pingChart = createMetricHistoryChart(
+            "pingChart",
+            "Ping Latency",
+            "#10b981",
+            "rgba(16, 185, 129, 0.12)",
+            "ms"
+        );
+    }
+
+    if (!jitterChart) {
+        jitterChart = createMetricHistoryChart(
+            "jitterChart",
+            "Jitter",
+            "#f59e0b",
+            "rgba(245, 158, 11, 0.12)",
+            "ms"
+        );
+    }
+
+    if (!packetLossChart) {
+        packetLossChart = createMetricHistoryChart(
+            "packetLossChart",
+            "Packet Loss",
+            "#ef4444",
+            "rgba(239, 68, 68, 0.12)",
+            "%",
+            0,
+            100
+        );
+    }
 
     console.log("Chart.js initialized.");
 }
@@ -1505,8 +1625,6 @@ async function loadNetworkHistory(range = null) {
 function updateHistoryChart(history = sessionTests, range = null) {
     if (!networkChart) initializeChart();
 
-    if (!networkChart) return;
-
     const selectedRange =
         range || $("historyRange")?.value || "recent";
 
@@ -1537,7 +1655,7 @@ function updateHistoryChart(history = sessionTests, range = null) {
             Date.parse(a.timestamp) - Date.parse(b.timestamp)
         );
 
-    networkChart.data.labels = filtered.map((item) =>
+    const labels = filtered.map((item) =>
         new Date(item.timestamp).toLocaleString([], {
             month: "short",
             day: "numeric",
@@ -1546,15 +1664,89 @@ function updateHistoryChart(history = sessionTests, range = null) {
         })
     );
 
-    networkChart.data.datasets[0].data =
-        filtered.map((item) => item.connectivity_score);
+    // 1. Existing composite networkChart (Connectivity Score + Download Speed)
+    if (networkChart) {
+        networkChart.data.labels = labels;
+        networkChart.data.datasets[0].data =
+            filtered.map((item) => item.connectivity_score);
+        networkChart.data.datasets[1].data =
+            filtered.map((item) => item.download_mbps);
+        networkChart.update();
+        updateChartDescription(filtered);
+    }
 
-    networkChart.data.datasets[1].data =
-        filtered.map((item) => item.download_mbps);
+    // Helper to safely update individual charts
+    function updateSingleChart(chart, dataExtractor, canvasId, metricName, unit) {
+        if (!chart) return;
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = filtered.map(dataExtractor);
+        chart.update();
 
-    networkChart.update();
+        const canvas = $(canvasId);
+        if (canvas?.setAttribute) {
+            if (!filtered.length) {
+                canvas.setAttribute(
+                    "aria-label",
+                    `${metricName} history chart. No history available for the selected range.`
+                );
+            } else {
+                const latest = filtered[filtered.length - 1];
+                const latestVal = dataExtractor(latest);
+                const valText = latestVal !== null && latestVal !== undefined && !Number.isNaN(Number(latestVal))
+                    ? ` Latest value: ${Number(latestVal).toFixed(1)} ${unit}.`
+                    : " Latest value not available.";
+                canvas.setAttribute(
+                    "aria-label",
+                    `${metricName} history chart showing ${filtered.length} test${filtered.length === 1 ? "" : "s"}.${valText}`
+                );
+            }
+        }
+    }
 
-    updateChartDescription(filtered);
+    // 2. Download Speed Chart
+    updateSingleChart(
+        downloadChart,
+        (item) => item.download_mbps,
+        "downloadChart",
+        "Download speed",
+        "Mbps"
+    );
+
+    // 3. Upload Speed Chart
+    updateSingleChart(
+        uploadChart,
+        (item) => item.upload_mbps,
+        "uploadChart",
+        "Upload speed",
+        "Mbps"
+    );
+
+    // 4. Ping Chart
+    updateSingleChart(
+        pingChart,
+        (item) => item.ping,
+        "pingChart",
+        "Ping latency",
+        "ms"
+    );
+
+    // 5. Jitter Chart
+    updateSingleChart(
+        jitterChart,
+        (item) => item.jitter,
+        "jitterChart",
+        "Jitter",
+        "ms"
+    );
+
+    // 6. Packet Loss Chart
+    updateSingleChart(
+        packetLossChart,
+        (item) => item.packet_loss,
+        "packetLossChart",
+        "Packet loss",
+        "%"
+    );
 }
 
 /**
@@ -2828,6 +3020,10 @@ if (typeof module !== "undefined" && module.exports) {
         updateNetworkStatus,
         handleConnectivityTransition,
         loadNetworkHistory,
+        exportHistoryToCSV,
+        normalizeHistoryItem,
+        initializeChart,
+        updateHistoryChart,
         smartConnectivity,
         resolveNetworkType,
         detectNetworkType

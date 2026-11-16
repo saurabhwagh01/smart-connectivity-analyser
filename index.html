@@ -170,7 +170,12 @@
       min-height: 280px;
     }
 
-    #networkChart {
+    #networkChart,
+    #downloadChart,
+    #uploadChart,
+    #pingChart,
+    #jitterChart,
+    #packetLossChart {
       display: block;
       width: 100% !important;
       height: 100% !important;
@@ -552,10 +557,59 @@
 
     </div>
 
-    <div class="chart-container" id="historyChartContainer">
-      <canvas id="networkChart" role="img" aria-label="Network history chart. No network history is available yet.">
-        Line chart of connectivity score and download speed for saved network tests.
-      </canvas>
+    <div id="historyChartContainer" class="space-y-6">
+      <div class="chart-container">
+        <canvas id="networkChart" role="img" aria-label="Network history chart. No network history is available yet.">
+          Line chart of connectivity score and download speed for saved network tests.
+        </canvas>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="glass-card p-4 rounded-xl space-y-2">
+          <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wider">Download Speed History (Mbps)</h3>
+          <div class="chart-container">
+            <canvas id="downloadChart" role="img" aria-label="Download speed history chart. No history available yet.">
+              Line chart of download speed in Mbps over time.
+            </canvas>
+          </div>
+        </div>
+
+        <div class="glass-card p-4 rounded-xl space-y-2">
+          <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wider">Upload Speed History (Mbps)</h3>
+          <div class="chart-container">
+            <canvas id="uploadChart" role="img" aria-label="Upload speed history chart. No history available yet.">
+              Line chart of upload speed in Mbps over time.
+            </canvas>
+          </div>
+        </div>
+
+        <div class="glass-card p-4 rounded-xl space-y-2">
+          <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wider">Ping Latency History (ms)</h3>
+          <div class="chart-container">
+            <canvas id="pingChart" role="img" aria-label="Ping history chart. No history available yet.">
+              Line chart of ping latency in milliseconds over time.
+            </canvas>
+          </div>
+        </div>
+
+        <div class="glass-card p-4 rounded-xl space-y-2">
+          <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wider">Jitter History (ms)</h3>
+          <div class="chart-container">
+            <canvas id="jitterChart" role="img" aria-label="Jitter history chart. No history available yet.">
+              Line chart of jitter in milliseconds over time.
+            </canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass-card p-4 rounded-xl space-y-2">
+        <h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wider">Packet Loss History (%)</h3>
+        <div class="chart-container">
+          <canvas id="packetLossChart" role="img" aria-label="Packet loss history chart. No history available yet.">
+            Line chart of packet loss percentage over time.
+          </canvas>
+        </div>
+      </div>
     </div>
 
   </section>
