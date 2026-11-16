@@ -174,10 +174,32 @@ function setStartButtonBusy(button, busy) {
     button.setAttribute?.("aria-disabled", String(busy));
     button.setAttribute?.("aria-busy", String(busy));
 
-    const label = $("startTestLabel");
+    const label = typeof document !== "undefined" && typeof $ === "function" ? $("startTestLabel") : null;
 
     if (label) {
         label.textContent = busy ? "Testing..." : "Start Test";
+    }
+
+    const icon = button.querySelector?.("i");
+
+    if (icon) {
+        if (busy) {
+            if (icon.dataset && !icon.dataset.prevClass) {
+                icon.dataset.prevClass = icon.className;
+            }
+            icon.className = "fa-solid fa-circle-notch fa-spin";
+        } else {
+            icon.className = icon.dataset?.prevClass || "fa-solid fa-bolt";
+            if (icon.dataset?.prevClass) {
+                delete icon.dataset.prevClass;
+            }
+        }
+    }
+
+    if (busy) {
+        button.classList?.add?.("loading");
+    } else {
+        button.classList?.remove?.("loading");
     }
 }
 
@@ -395,14 +417,35 @@ function resolveDashboardDisplayState(
         ? Math.max(0, Number(metrics.score))
         : sharedCalculateConnectivityScore(metrics);
 
+    const resolveMetricValue = (val) => {
+        if (isValidMetricNumber(val)) {
+            return formatMetric(val);
+        }
+        if (isTesting) {
+            return "Measuring...";
+        }
+        return "Unavailable";
+    };
+
+    const hasAnyPriorMetric =
+        isValidMetricNumber(metrics.download) ||
+        isValidMetricNumber(metrics.upload) ||
+        isValidMetricNumber(metrics.ping) ||
+        isValidMetricNumber(metrics.jitter) ||
+        isValidMetricNumber(metrics.packetLoss);
+
     return {
-        download: formatMetric(metrics.download),
-        upload: formatMetric(metrics.upload),
-        ping: formatMetric(metrics.ping),
-        jitter: formatMetric(metrics.jitter),
-        packetLoss: formatMetric(metrics.packetLoss),
+        download: resolveMetricValue(metrics.download),
+        upload: resolveMetricValue(metrics.upload),
+        ping: resolveMetricValue(metrics.ping),
+        jitter: resolveMetricValue(metrics.jitter),
+        packetLoss: resolveMetricValue(metrics.packetLoss),
         score,
-        metricsSubtitle: isHistoryRestored
+        metricsSubtitle: isTesting
+            ? (hasAnyPriorMetric
+                ? "Testing network... (displaying previous measurements)"
+                : "Testing network... (measurements in progress)")
+            : isHistoryRestored
             ? "Last recorded measurements (run a test for live metrics)"
             : "Live performance measurements",
         indicator: resolveConnectivityIndicator(score, {
@@ -1651,19 +1694,10 @@ async function startNetworkTest() {
 
     setText(
         "testMessage",
-        "Measuring download, upload, ping and jitter..."
+        "Testing network... Measuring download, upload, ping and jitter."
     );
 
-    currentMetrics = {
-        download: null,
-        upload: null,
-        ping: null,
-        jitter: null,
-        packetLoss: null,
-        networkType: currentMetrics.networkType,
-        networkTypeDetail: currentMetrics.networkTypeDetail,
-        score: 0
-    };
+    const previousMetrics = { ...currentMetrics };
 
     updateDashboard();
 
@@ -1675,6 +1709,17 @@ async function startNetworkTest() {
             ]);
 
         if (abortTestIfOffline()) return;
+
+        currentMetrics = {
+            download: null,
+            upload: null,
+            ping: null,
+            jitter: null,
+            packetLoss: null,
+            networkType: previousMetrics.networkType,
+            networkTypeDetail: previousMetrics.networkTypeDetail,
+            score: 0
+        };
 
         applyBackendMetrics(backendResult);
         applyBandwidthMetrics(bandwidthResult);
@@ -1748,6 +1793,11 @@ async function startNetworkTest() {
     } catch (error) {
         console.error("Network test failed:", error);
 
+        if (previousMetrics) {
+            currentMetrics = previousMetrics;
+            updateDashboard();
+        }
+
         setText(
             "testMessage",
             "Network test failed. Check that the backend server is running and you are connected to the internet, then try again."
@@ -1766,6 +1816,7 @@ async function startNetworkTest() {
             updateApplicationReadiness();
             updateNetworkRecommendation();
         } else {
+            updateDashboard();
             updateNetworkStatus();
         }
     }
@@ -2801,7 +2852,8 @@ if (typeof module !== "undefined" && module.exports) {
         loadNetworkHistory,
         smartConnectivity,
         resolveNetworkType,
-        detectNetworkType
+        detectNetworkType,
+        setStartButtonBusy
     };
 }
 /* =========================================================
