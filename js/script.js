@@ -8,7 +8,7 @@ const API_BASE =
         ? window.API_BASE
         : "http://127.0.0.1:8000/api";
 
-const $ = (id) => document.getElementById(id);
+const $ = (id) => (typeof document !== "undefined" && typeof document.getElementById === "function" ? document.getElementById(id) : null);
 
 let applicationInitialized = false;
 let testInProgress = false;
@@ -17,6 +17,9 @@ let speedTestTimeout = null;
 let networkChart = null;
 let connectivityMap = null;
 let userMarker = null;
+let accuracyCircle = null;
+let locationRequestId = 0;
+let isDetectingLocation = false;
 let savedMarkers = [];
 let sessionTimer = null;
 let sessionStartTime = Date.now();
@@ -97,6 +100,9 @@ function showToast(message) {
     showToast.timeout = setTimeout(() => {
         toast.classList.remove("show");
     }, 3000);
+    if (typeof showToast.timeout?.unref === "function") {
+        showToast.timeout.unref();
+    }
 }
 
 // ─── Format Metric ─────────────────────────────────────
@@ -740,17 +746,120 @@ function ensureMapReady() {
    LOCATION
    ========================================================= */
 
-function detectLocation() {
-    if (!navigator.geolocation) {
-        showToast("Geolocation is not supported.");
+function isValidCoordinate(latitude, longitude) {
+    return (
+        typeof latitude === "number" &&
+        Number.isFinite(latitude) &&
+        typeof longitude === "number" &&
+        Number.isFinite(longitude) &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180
+    );
+}
 
-        setText(
-            "locationResult",
-            "Geolocation is not supported by this browser."
-        );
+function calculateMapZoomForAccuracy(accuracy) {
+    if (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy <= 0) {
+        return 16;
+    }
+    if (accuracy <= 50) return 17;
+    if (accuracy <= 200) return 16;
+    if (accuracy <= 1000) return 14;
+    if (accuracy <= 5000) return 12;
+    return 10;
+}
 
+function setLocationButtonBusy(busy) {
+    const btn = $("detectLocation");
+    if (!btn) return;
+
+    if (busy) {
+        btn.disabled = true;
+        btn.setAttribute("aria-busy", "true");
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Locating...';
+    } else {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+        btn.innerHTML = '<i class="fa-solid fa-crosshairs" aria-hidden="true"></i> Detect Location';
+    }
+}
+
+function clearUserLocationVisuals() {
+    if (userMarker) {
+        if (connectivityMap && typeof connectivityMap.removeLayer === "function") {
+            connectivityMap.removeLayer(userMarker);
+        }
+        userMarker = null;
+    }
+
+    if (accuracyCircle) {
+        if (connectivityMap && typeof connectivityMap.removeLayer === "function") {
+            connectivityMap.removeLayer(accuracyCircle);
+        }
+        accuracyCircle = null;
+    }
+}
+
+function updateUserLocationVisuals(latitude, longitude, accuracy) {
+    ensureMapReady();
+
+    if (!connectivityMap || typeof L === "undefined") {
         return;
     }
+
+    const point = [latitude, longitude];
+    const zoomLevel = calculateMapZoomForAccuracy(accuracy);
+    connectivityMap.setView(point, zoomLevel);
+
+    const accuracyText = typeof accuracy === "number" && Number.isFinite(accuracy)
+        ? ` (±${Math.round(accuracy)} m)`
+        : "";
+    const popupContent = `<strong>Your Current Location</strong><br>Coordinates: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}${accuracyText}`;
+
+    if (userMarker) {
+        userMarker.setLatLng(point);
+    } else {
+        userMarker = L.marker(point).addTo(connectivityMap);
+    }
+    userMarker.bindPopup(popupContent).openPopup();
+
+    if (typeof accuracy === "number" && Number.isFinite(accuracy) && accuracy > 0) {
+        if (accuracyCircle) {
+            accuracyCircle.setLatLng(point);
+            accuracyCircle.setRadius(accuracy);
+        } else {
+            accuracyCircle = L.circle(point, {
+                radius: accuracy,
+                color: "#6366f1",
+                fillColor: "#818cf8",
+                fillOpacity: 0.15,
+                weight: 1.5
+            }).addTo(connectivityMap);
+        }
+    } else if (accuracyCircle) {
+        connectivityMap.removeLayer(accuracyCircle);
+        accuracyCircle = null;
+    }
+}
+
+function detectLocation() {
+    if (isDetectingLocation) {
+        return;
+    }
+
+    if (!navigator || !navigator.geolocation) {
+        showToast("Geolocation is not supported.");
+        setText(
+            "locationResult",
+            "Geolocation is not supported by this browser or current insecure environment."
+        );
+        return;
+    }
+
+    isDetectingLocation = true;
+    const currentRequestId = ++locationRequestId;
+    setLocationButtonBusy(true);
 
     setText(
         "locationResult",
@@ -759,53 +868,75 @@ function detectLocation() {
 
     navigator.geolocation.getCurrentPosition(
         (position) => {
+            if (currentRequestId !== locationRequestId) {
+                return;
+            }
+
+            isDetectingLocation = false;
+            setLocationButtonBusy(false);
+
+            if (!position || !position.coords) {
+                setText("locationResult", "Unable to detect valid location coordinates. Try again.");
+                showToast("Unable to detect valid location coordinates.");
+                return;
+            }
+
             const latitude = position.coords.latitude;
             const longitude = position.coords.longitude;
             const accuracy = position.coords.accuracy;
+
+            if (!isValidCoordinate(latitude, longitude)) {
+                clearUserLocationVisuals();
+                currentLocation = null;
+                const invalidMsg = "Invalid GPS coordinates received from browser. Try again.";
+                setText("locationResult", invalidMsg);
+                showToast(invalidMsg);
+                return;
+            }
 
             currentLocation = {
                 latitude,
                 longitude,
                 accuracy,
-                timestamp: position.timestamp
+                timestamp: position.timestamp || Date.now()
             };
 
-            ensureMapReady();
+            updateUserLocationVisuals(latitude, longitude, accuracy);
 
-            if (connectivityMap && typeof L !== "undefined") {
-                const point = [latitude, longitude];
+            const accuracyRounded = typeof accuracy === "number" && Number.isFinite(accuracy)
+                ? Math.round(accuracy)
+                : null;
+            const accuracyDisplay = accuracyRounded !== null ? ` (±${accuracyRounded} m)` : "";
 
-                connectivityMap.setView(point, 16);
+            let message = `Location detected: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}${accuracyDisplay}`;
 
-                if (userMarker) {
-                    userMarker.setLatLng(point);
-                } else {
-                    userMarker = L.marker(point).addTo(connectivityMap);
-                }
-
-                userMarker
-                    .bindPopup("Your Current Location")
-                    .openPopup();
+            if (accuracyRounded !== null && accuracyRounded > 1000) {
+                message = `Location approximate: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}${accuracyDisplay}. Warning: Poor accuracy; click Detect Location to retry.`;
             }
 
-            setText(
-                "locationResult",
-                `Location detected: ${latitude.toFixed(5)}, ${longitude.toFixed(5)} (±${Math.round(accuracy)} m)`
-            );
-
+            setText("locationResult", message);
             showToast("Location detected successfully.");
         },
 
         (error) => {
-            let message = "Unable to detect location.";
+            if (currentRequestId !== locationRequestId) {
+                return;
+            }
 
-            if (error.code === 1) {
-                message =
-                    "Location permission denied. Allow location access in your browser.";
-            } else if (error.code === 2) {
-                message = "Location information is unavailable.";
-            } else if (error.code === 3) {
-                message = "Location request timed out. Try again.";
+            isDetectingLocation = false;
+            setLocationButtonBusy(false);
+
+            let message = "Unable to detect location. Try again.";
+
+            if (error) {
+                if (error.code === 1) {
+                    message =
+                        "Location permission denied. Please allow location access in your browser settings and try again.";
+                } else if (error.code === 2) {
+                    message = "Location information is unavailable. Check your device GPS or connection and try again.";
+                } else if (error.code === 3) {
+                    message = "Location request timed out. Click Detect Location to try again.";
+                }
             }
 
             setText("locationResult", message);
@@ -814,7 +945,7 @@ function detectLocation() {
 
         {
             enableHighAccuracy: true,
-            timeout: 20000,
+            timeout: 15000,
             maximumAge: 0
         }
     );
@@ -2805,6 +2936,21 @@ if (typeof window !== "undefined") {
 
     window.detectNetworkType =
         detectNetworkType;
+
+    window.isValidCoordinate =
+        isValidCoordinate;
+
+    window.calculateMapZoomForAccuracy =
+        calculateMapZoomForAccuracy;
+
+    window.detectLocation =
+        detectLocation;
+
+    window.updateUserLocationVisuals =
+        updateUserLocationVisuals;
+
+    window.clearUserLocationVisuals =
+        clearUserLocationVisuals;
 }
 
 /* ─── Node.js Exports for Tests ─────────────────────── */
@@ -2830,7 +2976,12 @@ if (typeof module !== "undefined" && module.exports) {
         loadNetworkHistory,
         smartConnectivity,
         resolveNetworkType,
-        detectNetworkType
+        detectNetworkType,
+        isValidCoordinate,
+        calculateMapZoomForAccuracy,
+        detectLocation,
+        updateUserLocationVisuals,
+        clearUserLocationVisuals
     };
 }
 /* =========================================================
