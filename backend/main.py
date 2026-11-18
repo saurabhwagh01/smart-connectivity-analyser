@@ -51,10 +51,6 @@ try:
         normalize_values,
         denormalize_value,
     )
-    from final_predictor import (
-        final_predictor,
-        FINAL_PREDICTOR_READY,
-    )
 except Exception as error:
     torch = None
     AI_IMPORT_ERROR = str(error)
@@ -65,10 +61,17 @@ except Exception as error:
     load_network_data = lambda: []
     normalize_values = None
     denormalize_value = None
-    final_predictor = None
-    FINAL_PREDICTOR_READY = False
 else:
     AI_IMPORT_ERROR = None
+
+try:
+    from final_predictor import (
+        final_predictor,
+        FINAL_PREDICTOR_READY,
+    )
+except Exception as error:
+    final_predictor = None
+    FINAL_PREDICTOR_READY = False
 
 
 
@@ -1151,13 +1154,22 @@ def save_network_test(data: NetworkTest):
 
     connection.commit()
 
-
-
     test_id = cursor.lastrowid
 
-
-
     connection.close()
+
+    if final_predictor is not None:
+        try:
+            final_predictor.notify_record_saved(
+                download_mbps=data.download_mbps,
+                upload_mbps=data.upload_mbps,
+                ping_ms=data.ping_ms,
+                jitter_ms=data.jitter_ms,
+                packet_loss=data.packet_loss,
+                connectivity_score=data.connectivity_score,
+            )
+        except Exception:
+            pass
 
 
 
@@ -1318,13 +1330,18 @@ def get_network_history(
 def ai_status():
     data = load_network_data() if AI_IMPORT_ERROR is None else []
 
+    if final_predictor is not None and hasattr(final_predictor, "get_status_info"):
+        pred_model_info = final_predictor.get_status_info()
+    else:
+        pred_model_info = {
+            "name": "HistGradientBoosting",
+            "loaded": bool(final_predictor.ready if final_predictor else FINAL_PREDICTOR_READY),
+        }
+
     return {
         "success": AI_MODELS_READY,
         "message": AI_MODELS_MESSAGE,
-        "prediction_model": {
-            "name": "HistGradientBoosting",
-            "loaded": FINAL_PREDICTOR_READY,
-        },
+        "prediction_model": pred_model_info,
         "anomaly_model": {
             "name": "Transformer Autoencoder",
             "loaded": ai_anomaly_model is not None,
@@ -1340,7 +1357,18 @@ def ai_status():
 
 @app.get("/api/ai/prediction")
 def ai_prediction():
-    if not FINAL_PREDICTOR_READY:
+    # If final_predictor is not imported or not ready, try refreshing or check readiness
+    if final_predictor is None:
+        raise HTTPException(
+            status_code=503,
+            detail=AI_MODELS_MESSAGE,
+        )
+
+    # Trigger refresh if stale or not yet trained
+    if hasattr(final_predictor, "refresh_if_needed"):
+        final_predictor.refresh_if_needed()
+
+    if not getattr(final_predictor, "ready", False) or getattr(final_predictor, "model", None) is None:
         raise HTTPException(
             status_code=503,
             detail=getattr(final_predictor, "message", AI_MODELS_MESSAGE),
@@ -1503,13 +1531,13 @@ def delete_network_history():
 
     connection.commit()
 
-
-
     connection.close()
 
-
-
-
+    if final_predictor is not None:
+        try:
+            final_predictor.notify_dataset_cleared()
+        except Exception:
+            pass
 
     return {
 
