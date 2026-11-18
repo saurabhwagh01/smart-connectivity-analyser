@@ -745,10 +745,10 @@ def network_quality():
 
     ping_times, packet_loss = parse_ping_output(output)
 
-    # No replies and no loss summary means ping failed to run
-    # (for example, no permission to send pings). That is not
-    # the same as a real 100% packet loss.
-    if not ping_times and packet_loss is None:
+    # Empty output means the ping command failed to produce a result.
+    # Non-empty timeout responses are valid measurements and should
+    # be treated as 100% packet loss with unavailable latency.
+    if not output.strip():
         reason = process.stderr.strip() or "ping produced no output"
         raise HTTPException(
             status_code=503,
@@ -899,7 +899,7 @@ def network_quality():
 
 
 
-        jitter = 0.0
+        jitter = None
 
 
 
@@ -1007,13 +1007,7 @@ def network_quality():
 
 
 
-        "jitter_ms": round(
-
-            jitter,
-
-            2
-
-        ),
+        "jitter_ms": round(jitter, 2) if jitter is not None else None,
 
 
 

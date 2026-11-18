@@ -59,11 +59,18 @@ const METRIC_UNITS = Object.freeze({
    ========================================================= */
 
 function isValidMetric(value) {
-    return value !== null &&
-        value !== undefined &&
-        value !== "" &&
-        typeof value !== "boolean" &&
-        Number.isFinite(Number(value));
+    if (
+        value === null ||
+        value === undefined ||
+        value === "" ||
+        typeof value === "boolean" ||
+        typeof value === "object" ||
+        (typeof value === "string" && value.trim() === "")
+    ) {
+        return false;
+    }
+
+    return Number.isFinite(Number(value));
 }
 
 function safeNumber(value, fallback = null) {
@@ -2626,53 +2633,61 @@ function startSessionTimer() {
    SESSION STATISTICS
    ========================================================= */
 
+function calculateSessionStatistics(tests = []) {
+    const records = Array.isArray(tests) ? tests : [];
+
+    const speeds = records
+        .map((raw) =>
+            safeNumber(normalizeHistoryItem(raw).download_mbps)
+        )
+        .filter((value) => value !== null);
+
+    const pings = records
+        .map((raw) =>
+            safeNumber(normalizeHistoryItem(raw).ping)
+        )
+        .filter((value) => value !== null);
+
+    return {
+        averageSpeed: speeds.length
+            ? speeds.reduce((total, value) => total + value, 0) / speeds.length
+            : null,
+
+        averagePing: pings.length
+            ? pings.reduce((total, value) => total + value, 0) / pings.length
+            : null,
+
+        peakSpeed: speeds.length
+            ? Math.max(...speeds)
+            : null
+    };
+}
+
 function updateSessionStatistics() {
-    const speeds = sessionTests
-        .map((raw) =>
-            safeNumber(
-                normalizeHistoryItem(raw).download_mbps
-            )
-        )
-        .filter((value) => value !== null);
-
-    const pings = sessionTests
-        .map((raw) =>
-            safeNumber(
-                normalizeHistoryItem(raw).ping
-            )
-        )
-        .filter((value) => value !== null);
-
-    const averageSpeed = speeds.length
-        ? speeds.reduce((a, b) => a + b, 0) / speeds.length
-        : null;
-
-    const averagePing = pings.length
-        ? pings.reduce((a, b) => a + b, 0) / pings.length
-        : null;
-
-    const peakSpeed = speeds.length
-        ? Math.max(...speeds)
-        : null;
+    const {
+        averageSpeed,
+        averagePing,
+        peakSpeed
+    } = calculateSessionStatistics(sessionTests);
 
     setText(
         "averageSpeed",
         averageSpeed === null
-            ? "—"
+            ? "?"
             : `${averageSpeed.toFixed(2)} Mbps`
     );
 
     setText(
         "averagePing",
         averagePing === null
-            ? "—"
+            ? "?"
             : `${averagePing.toFixed(2)} ms`
     );
 
     setText(
         "peakSpeed",
         peakSpeed === null
-            ? "—"
+            ? "?"
             : `${peakSpeed.toFixed(2)} Mbps`
     );
 
@@ -2787,6 +2802,7 @@ if (typeof module !== "undefined" && module.exports) {
         formatNumber,
         formatMetric,
         formatNetworkMetric,
+        calculateSessionStatistics,
         validateHistoryFilterValues,
         calculateConnectivityScore: sharedCalculateConnectivityScore,
         getConnectivityStatus,
