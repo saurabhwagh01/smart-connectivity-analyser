@@ -11,7 +11,8 @@ const {
     calculateMapZoomForAccuracy,
     detectLocation,
     updateUserLocationVisuals,
-    clearUserLocationVisuals
+    clearUserLocationVisuals,
+    smartConnectivity
 } = require("../js/script.js");
 
 function createMockElement() {
@@ -55,11 +56,15 @@ function withMockEnv(navObj, fn) {
         addEventListener() {}
     };
 
-    Object.defineProperty(globalThis, "navigator", {
-        value: navObj,
-        configurable: true,
-        writable: true
-    });
+    if (navObj === undefined) {
+        delete globalThis.navigator;
+    } else {
+        Object.defineProperty(globalThis, "navigator", {
+            value: navObj,
+            configurable: true,
+            writable: true
+        });
+    }
 
     const restore = () => {
         if (originalNavDescriptor) {
@@ -156,6 +161,20 @@ describe("Geolocation Lifecycle and UI States (detectLocation)", () => {
     it("handles missing or unsupported navigator.geolocation gracefully", () => {
         withMockEnv({}, ({ dom }) => {
             detectLocation();
+
+            assert.match(
+                dom.locationResult.textContent,
+                /Geolocation is not supported/
+            );
+            assert.equal(dom.detectLocation.disabled, false);
+        });
+    });
+
+    it("handles typeof navigator === 'undefined' without throwing ReferenceError", () => {
+        withMockEnv(undefined, ({ dom }) => {
+            assert.doesNotThrow(() => {
+                detectLocation();
+            });
 
             assert.match(
                 dom.locationResult.textContent,
@@ -280,11 +299,13 @@ describe("Geolocation Lifecycle and UI States (detectLocation)", () => {
 
     it("prevents duplicate concurrent requests while detection is in-flight", () => {
         let callCount = 0;
+        let finishCallback = null;
 
         withMockEnv({
             geolocation: {
                 getCurrentPosition(success) {
                     callCount++;
+                    finishCallback = success;
                 }
             }
         }, ({ dom }) => {
@@ -295,6 +316,91 @@ describe("Geolocation Lifecycle and UI States (detectLocation)", () => {
             // Trigger again while first is pending
             detectLocation();
             assert.equal(callCount, 1); // Still 1, didn't trigger duplicate call
+
+            // Complete first request to clean up pending state
+            finishCallback({
+                coords: { latitude: 19.076, longitude: 72.8777, accuracy: 25 },
+                timestamp: Date.now()
+            });
+            assert.equal(dom.detectLocation.disabled, false);
+        });
+    });
+
+    it("clears stale location and visuals when a subsequent request fails (failed retry)", () => {
+        let requestMode = "success";
+        const navMock = {
+            geolocation: {
+                getCurrentPosition(success, error) {
+                    if (requestMode === "success") {
+                        success({
+                            coords: { latitude: 19.076, longitude: 72.8777, accuracy: 25 },
+                            timestamp: Date.now()
+                        });
+                    } else {
+                        error({ code: 1, message: "User denied location access" });
+                    }
+                }
+            }
+        };
+
+        withMockEnv(navMock, ({ dom }) => {
+            // Step 1: Initial successful detection
+            requestMode = "success";
+            detectLocation();
+            assert.match(dom.locationResult.textContent, /Location detected/);
+
+            // Step 2: Subsequent request fails
+            requestMode = "fail";
+            detectLocation();
+
+            // Verify stale location is cleared and error message is displayed
+            assert.match(dom.locationResult.textContent, /permission denied/i);
+            assert.equal(dom.detectLocation.disabled, false);
+
+            // Step 3: Verify retry is available and works
+            requestMode = "success";
+            detectLocation();
+            assert.match(dom.locationResult.textContent, /Location detected/);
+        });
+    });
+
+    it("prevents an outdated asynchronous callback from overwriting newer state (stale callback)", () => {
+        let pendingCallbacks = [];
+        const navMock = {
+            geolocation: {
+                getCurrentPosition(success, error) {
+                    pendingCallbacks.push({ success, error });
+                }
+            }
+        };
+
+        withMockEnv(navMock, ({ dom }) => {
+            // First detection request starts
+            detectLocation();
+            assert.equal(pendingCallbacks.length, 1);
+
+            // Simulate first call failing or timing out
+            pendingCallbacks[0].error({ code: 3, message: "Timeout" });
+            assert.match(dom.locationResult.textContent, /timed out/i);
+
+            // User clicks retry (starts second detection request)
+            detectLocation();
+            assert.equal(pendingCallbacks.length, 2);
+
+            // Complete second request successfully
+            pendingCallbacks[1].success({
+                coords: { latitude: 37.7749, longitude: -122.4194, accuracy: 10 },
+                timestamp: Date.now()
+            });
+            assert.match(dom.locationResult.textContent, /37.77490, -122.41940/);
+
+            // If an obsolete callback from request 1 tries to fire late, it must be ignored
+            pendingCallbacks[0].success({
+                coords: { latitude: 10.0, longitude: 10.0, accuracy: 5 },
+                timestamp: Date.now()
+            });
+            // Coordinates from request 2 must remain
+            assert.match(dom.locationResult.textContent, /37.77490, -122.41940/);
         });
     });
 });

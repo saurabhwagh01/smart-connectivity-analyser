@@ -689,7 +689,7 @@ function initializeMap() {
         connectivityMap = L.map(mapElement, {
             zoomControl: true,
             scrollWheelZoom: true
-        }).setView([19.0760, 72.8777], 12);
+        }).setView([20.0, 0.0], 2);
 
         const tileLayer = L.tileLayer(
             "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -848,7 +848,7 @@ function detectLocation() {
         return;
     }
 
-    if (!navigator || !navigator.geolocation) {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
         showToast("Geolocation is not supported.");
         setText(
             "locationResult",
@@ -876,6 +876,8 @@ function detectLocation() {
             setLocationButtonBusy(false);
 
             if (!position || !position.coords) {
+                clearUserLocationVisuals();
+                currentLocation = null;
                 setText("locationResult", "Unable to detect valid location coordinates. Try again.");
                 showToast("Unable to detect valid location coordinates.");
                 return;
@@ -926,6 +928,10 @@ function detectLocation() {
             isDetectingLocation = false;
             setLocationButtonBusy(false);
 
+            // Clear stale location data and visuals so failed attempts never leave old position
+            clearUserLocationVisuals();
+            currentLocation = null;
+
             let message = "Unable to detect location. Try again.";
 
             if (error) {
@@ -952,21 +958,13 @@ function detectLocation() {
 }
 
 function saveLocation() {
-    let latitude;
-    let longitude;
-
-    if (currentLocation) {
-        latitude = currentLocation.latitude;
-        longitude = currentLocation.longitude;
-    } else if (connectivityMap) {
-        const center = connectivityMap.getCenter();
-
-        latitude = center.lat;
-        longitude = center.lng;
-    } else {
+    if (!currentLocation) {
         showToast("Detect your location first.");
         return;
     }
+
+    const latitude = currentLocation.latitude;
+    const longitude = currentLocation.longitude;
 
     const point = {
         latitude,
