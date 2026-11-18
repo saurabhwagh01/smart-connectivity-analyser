@@ -337,7 +337,12 @@ body {
     min-height: 280px;
 }
 
-#networkChart {
+#networkChart,
+#downloadChart,
+#uploadChart,
+#pingChart,
+#jitterChart,
+#packetLossChart {
     display: block;
 
     width: 100% !important;
