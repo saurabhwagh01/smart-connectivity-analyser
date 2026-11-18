@@ -327,10 +327,10 @@ def test_dataset_changes_during_training(test_db):
 
     with patch("backend.final_predictor.build_production_prediction_model", side_effect=builder_that_inserts_record):
         trained = predictor.train()
-        assert trained is True
+        assert trained is False
 
     # The completed model was trained for rev 1, but new record pushed dataset to rev 2
-    # So model must remain marked stale!
+    # The stale candidate was discarded, so model_revision has not advanced to rev 2
     assert predictor.model_revision < predictor.dataset_revision
     assert predictor.is_stale
     status = predictor.get_status_info()
@@ -420,3 +420,133 @@ def test_status_endpoint_readiness(client, monkeypatch):
     assert status["prediction_model"]["ready"] is True
     assert status["prediction_model"]["stale"] is False
     assert status["prediction_model"]["freshness"] == "fresh"
+
+
+# ----------------------------------------------------------------------
+# Test 11: Explicit return value on successful model training
+# ----------------------------------------------------------------------
+def test_successful_training_returns_true(test_db):
+    """
+    Verify that when model training succeeds and candidate is published,
+    train() explicitly returns True and model_revision matches dataset_revision.
+    """
+    predictor = FinalConnectivityPredictor(db_path=test_db)
+    _populate_records(test_db, 10)
+    predictor.invalidate()
+    assert predictor.is_stale is True
+    target_rev = predictor.dataset_revision
+
+    result = predictor.train()
+    assert result is True
+    assert predictor.ready is True
+    assert predictor.model is not None
+    assert predictor.model_revision == target_rev
+    assert predictor.dataset_revision == target_rev
+    assert predictor.is_stale is False
+
+
+# ----------------------------------------------------------------------
+# Test 12: Dataset deletion during active training discards candidate
+# ----------------------------------------------------------------------
+def test_dataset_deletion_during_active_training(test_db):
+    """
+    Verify race condition where notify_dataset_cleared() is invoked while
+    model training is in progress. The candidate trained on deleted records
+    must be discarded, model_revision must not advance to target_revision,
+    and train() must return False without overwriting cleared model state.
+    """
+    predictor = FinalConnectivityPredictor(db_path=test_db)
+    _populate_records(test_db, 10)
+    initial_train_result = predictor.train()
+    assert initial_train_result is True
+    published_model = predictor.model
+    assert published_model is not None
+
+    # Now add more records so model is marked stale for a new revision
+    _populate_records(test_db, 2)
+    predictor.invalidate()
+    target_rev = predictor.dataset_revision
+
+    training_started = threading.Event()
+    dataset_cleared = threading.Event()
+
+    import backend.final_predictor as fp_module
+    original_builder = fp_module.build_production_prediction_model
+
+    def builder_with_deletion_sync():
+        model = original_builder()
+        original_fit = model.fit
+
+        def fit_and_wait(X, y):
+            # Signal that candidate training has begun
+            training_started.set()
+            # Wait until dataset deletion has been triggered
+            cleared_ok = dataset_cleared.wait(timeout=5.0)
+            assert cleared_ok, "Timed out waiting for dataset to be cleared"
+            return original_fit(X, y)
+
+        model.fit = fit_and_wait
+        return model
+
+    train_result_container = []
+
+    def run_training():
+        res = predictor.train()
+        train_result_container.append(res)
+
+    worker_thread = threading.Thread(target=run_training)
+
+    with patch("backend.final_predictor.build_production_prediction_model", side_effect=builder_with_deletion_sync):
+        worker_thread.start()
+
+        # Step 4: Wait until training has definitely started
+        started_ok = training_started.wait(timeout=5.0)
+        assert started_ok, "Timed out waiting for training to begin"
+
+        # Step 5: Invoke notify_dataset_cleared() while training is active
+        # Simulate clearing the database table as well
+        with sqlite3.connect(test_db) as conn:
+            conn.execute("DELETE FROM network_tests")
+            conn.commit()
+
+        predictor.notify_dataset_cleared()
+
+        # Step 6: Confirm dataset revision has changed
+        assert predictor.dataset_revision > target_rev
+        cleared_rev = predictor.dataset_revision
+        assert predictor.model is None
+        assert predictor.ready is False
+
+        # Step 7: Resume candidate training operation
+        dataset_cleared.set()
+
+        # Step 8: Wait for refresh completion
+        worker_thread.join(timeout=10.0)
+        assert not worker_thread.is_alive()
+
+    # Assertions:
+    # 1. The refresh operation returns an unsuccessful result
+    assert len(train_result_container) == 1
+    assert train_result_container[0] is False
+
+    # 2. The stale candidate was not published and model remains cleared
+    assert predictor.model is None
+    assert predictor.ready is False
+
+    # 3. model_revision is not advanced to the stale target revision
+    assert predictor.model_revision != target_rev
+    assert predictor.model_revision == cleared_rev
+
+    # 4. Model is not reported as fresh
+    status = predictor.get_status_info()
+    assert status["freshness"] == "unavailable"
+
+    # 5. The in-progress refresh lock/flag is released
+    assert predictor.is_training is False
+
+    # 6. A subsequent refresh can execute normally once new data arrives
+    _populate_records(test_db, 10)
+    predictor.invalidate()
+    assert predictor.train() is True
+    assert predictor.ready is True
+    assert predictor.model is not None

@@ -337,9 +337,17 @@ class FinalConnectivityPredictor:
                     self.message = f"Refresh failed: {exc}. Using previous model."
                 return self.ready
 
-        # Training succeeded: safely publish the candidate model
+        # Training succeeded: safely publish the candidate model if revision has not changed
         with self._lock:
             self.is_training = False
+            if self.dataset_revision != target_revision:
+                logger.warning(
+                    "Discarding candidate model trained for revision %d because dataset revision is now %d.",
+                    target_revision,
+                    self.dataset_revision,
+                )
+                return False
+
             self.model = candidate_model
             self.record_count = len(data) if data is not None else 0
             self.training_samples = len(X) if X is not None else 0
