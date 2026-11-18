@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.ensemble import HistGradientBoostingRegressor
+
+try:
+    from sklearn.ensemble import HistGradientBoostingRegressor
+except Exception:
+    HistGradientBoostingRegressor = None
 
 
 CONNECTIVITY_SCORE_MIN = 0.0
