@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
     normalizeHistoryItem,
     initializeChart,
+    destroyCharts,
     updateHistoryChart,
     validateHistoryFilterValues,
     exportHistoryToCSV
@@ -16,7 +17,7 @@ class MockCanvas {
         this.attributes = {};
     }
     getContext(type) {
-        return { type };
+        return { type, canvasId: this.id };
     }
     setAttribute(name, value) {
         this.attributes[name] = String(value);
@@ -27,19 +28,45 @@ class MockCanvas {
 }
 
 class MockChart {
+    static instances = [];
+    static registry = new Map();
+
+    static getChart(key) {
+        if (!key) return null;
+        if (typeof key === "string") return MockChart.registry.get(key) || null;
+        if (key.id) return MockChart.registry.get(key.id) || null;
+        return null;
+    }
+
     constructor(ctx, config) {
         this.ctx = ctx;
+        this.config = config;
         this.type = config.type;
         this.data = config.data || { labels: [], datasets: [] };
         this.options = config.options || {};
         this.updateCalls = 0;
         this.resizeCalls = 0;
+        this.destroyed = false;
+
+        MockChart.instances.push(this);
+        if (ctx && ctx.canvasId) {
+            MockChart.registry.set(ctx.canvasId, this);
+        }
     }
+
     update() {
         this.updateCalls++;
     }
+
     resize() {
         this.resizeCalls++;
+    }
+
+    destroy() {
+        this.destroyed = true;
+        if (this.ctx && this.ctx.canvasId) {
+            MockChart.registry.delete(this.ctx.canvasId);
+        }
     }
 }
 
@@ -47,6 +74,9 @@ describe("Network History Graphs & Charts Suite", () => {
     let elements = {};
 
     beforeEach(() => {
+        MockChart.instances = [];
+        MockChart.registry.clear();
+
         elements = {
             networkChart: new MockCanvas("networkChart"),
             downloadChart: new MockCanvas("downloadChart"),
@@ -64,6 +94,9 @@ describe("Network History Graphs & Charts Suite", () => {
             getElementById: (id) => elements[id] || null
         };
         global.Chart = MockChart;
+
+        // Reset chart singletons before each test
+        destroyCharts();
     });
 
     test("1. Correct mapping of historical API records via normalizeHistoryItem", () => {
@@ -133,18 +166,122 @@ describe("Network History Graphs & Charts Suite", () => {
         assert.equal(item.connectivity_score, 40);
     });
 
-    test("4. initializeChart creates instances for all historical charts", () => {
-        initializeChart();
-        // Verifying charts initialized without throw
-        assert.ok(elements.networkChart);
-        assert.ok(elements.downloadChart);
-        assert.ok(elements.uploadChart);
-        assert.ok(elements.pingChart);
-        assert.ok(elements.jitterChart);
-        assert.ok(elements.packetLossChart);
+    test("4. Timestamp normalization: preserves invalid/missing timestamps as null without defaulting to current time", () => {
+        // Missing timestamp
+        const missing = normalizeHistoryItem({ download_mbps: 50 });
+        assert.strictEqual(missing.timestamp, null);
+
+        // Null timestamp
+        const nullTime = normalizeHistoryItem({ timestamp: null, download_mbps: 50 });
+        assert.strictEqual(nullTime.timestamp, null);
+
+        // Empty string timestamp
+        const emptyTime = normalizeHistoryItem({ timestamp: "", download_mbps: 50 });
+        assert.strictEqual(emptyTime.timestamp, null);
+
+        // Invalid timestamp string
+        const invalidTime = normalizeHistoryItem({ timestamp: "not-a-valid-date", download_mbps: 50 });
+        assert.strictEqual(invalidTime.timestamp, null);
+
+        // Valid ISO timestamp
+        const validTime = normalizeHistoryItem({ timestamp: "2026-11-16T12:00:00.000Z", download_mbps: 50 });
+        assert.strictEqual(validTime.timestamp, "2026-11-16T12:00:00.000Z");
     });
 
-    test("5. updateHistoryChart updates all charts with correct metric mappings", () => {
+    test("5. Chart dataset excludes invalid timestamps and preserves valid records ordering", () => {
+        initializeChart();
+
+        const mixedRecords = [
+            { timestamp: "2026-11-16T10:00:00.000Z", download_mbps: 30.0, score: 70 },
+            { timestamp: "invalid-timestamp", download_mbps: 99.0, score: 99 },
+            { timestamp: null, download_mbps: 88.0, score: 88 },
+            { download_mbps: 77.0, score: 77 },
+            { timestamp: "2026-11-16T08:00:00.000Z", download_mbps: 20.0, score: 60 },
+            { timestamp: "2026-11-16T12:00:00.000Z", download_mbps: 40.0, score: 80 }
+        ];
+
+        updateHistoryChart(mixedRecords, "all");
+
+        const downloadChartInstance = MockChart.getChart("downloadChart");
+        assert.ok(downloadChartInstance, "downloadChart instance should exist");
+
+        // Exactly the 3 valid records should be plotted
+        assert.strictEqual(downloadChartInstance.data.labels.length, 3);
+        // Correct chronological order: 08:00, 10:00, 12:00
+        assert.deepStrictEqual(downloadChartInstance.data.datasets[0].data, [20.0, 30.0, 40.0]);
+
+        const networkChartInstance = MockChart.getChart("networkChart");
+        assert.strictEqual(networkChartInstance.data.labels.length, 3);
+        assert.deepStrictEqual(networkChartInstance.data.datasets[0].data, [60, 70, 80]); // Score
+        assert.deepStrictEqual(networkChartInstance.data.datasets[1].data, [20.0, 30.0, 40.0]); // Download
+    });
+
+    test("6. initializeChart constructs genuine Chart instances for all five historical metrics and composite chart", () => {
+        initializeChart();
+
+        const expectedCharts = [
+            { id: "networkChart", datasets: 2, labelContains: "Connectivity Score" },
+            { id: "downloadChart", datasets: 1, labelContains: "Download Speed" },
+            { id: "uploadChart", datasets: 1, labelContains: "Upload Speed" },
+            { id: "pingChart", datasets: 1, labelContains: "Ping Latency" },
+            { id: "jitterChart", datasets: 1, labelContains: "Jitter" },
+            { id: "packetLossChart", datasets: 1, labelContains: "Packet Loss" }
+        ];
+
+        // 6 distinct Chart instances constructed
+        assert.strictEqual(MockChart.instances.length, 6);
+
+        for (const exp of expectedCharts) {
+            const instance = MockChart.getChart(exp.id);
+            assert.ok(instance, `Expected chart instance for ${exp.id}`);
+            assert.strictEqual(instance.type, "line");
+            assert.strictEqual(instance.ctx.canvasId, exp.id);
+            assert.strictEqual(instance.data.datasets.length, exp.datasets);
+            assert.match(instance.data.datasets[0].label, new RegExp(exp.labelContains, "i"));
+            assert.strictEqual(instance.destroyed, false);
+        }
+    });
+
+    test("7. Chart instances are retained and updated when data changes, and destroyed on cleanup", () => {
+        initializeChart();
+        assert.strictEqual(MockChart.instances.length, 6);
+
+        const firstBatch = MockChart.instances.slice();
+
+        // Calling updateHistoryChart updates existing instances without re-creating them
+        const historyData = [
+            { timestamp: "2026-11-16T10:00:00.000Z", download_mbps: 45.2, upload_mbps: 15.0, ping_ms: 20, jitter_ms: 2, packet_loss: 0, connectivity_score: 85 }
+        ];
+        updateHistoryChart(historyData, "all");
+
+        // No new instances created
+        assert.strictEqual(MockChart.instances.length, 6);
+        for (const chart of firstBatch) {
+            assert.ok(chart.updateCalls >= 1, `Chart on canvas ${chart.ctx.canvasId} was updated`);
+            assert.strictEqual(chart.destroyed, false);
+            assert.strictEqual(chart.data.labels.length, 1);
+        }
+
+        // Specific metric datasets updated
+        const pingInstance = MockChart.getChart("pingChart");
+        assert.deepStrictEqual(pingInstance.data.datasets[0].data, [20]);
+
+        const jitterInstance = MockChart.getChart("jitterChart");
+        assert.deepStrictEqual(jitterInstance.data.datasets[0].data, [2]);
+
+        const lossInstance = MockChart.getChart("packetLossChart");
+        assert.deepStrictEqual(lossInstance.data.datasets[0].data, [0]);
+
+        // destroyCharts cleanly destroys all 6 instances
+        destroyCharts();
+        for (const chart of firstBatch) {
+            assert.strictEqual(chart.destroyed, true);
+        }
+        assert.strictEqual(MockChart.getChart("networkChart"), null);
+        assert.strictEqual(MockChart.getChart("downloadChart"), null);
+    });
+
+    test("8. updateHistoryChart updates accessibility aria-labels for all metrics", () => {
         initializeChart();
 
         const history = [
@@ -179,7 +316,7 @@ describe("Network History Graphs & Charts Suite", () => {
         assert.match(elements.packetLossChart.getAttribute("aria-label"), /Packet loss history chart showing 2 tests/i);
     });
 
-    test("6. updateHistoryChart handles empty history gracefully", () => {
+    test("9. updateHistoryChart handles empty history gracefully", () => {
         initializeChart();
 
         updateHistoryChart([], "all");
@@ -192,7 +329,7 @@ describe("Network History Graphs & Charts Suite", () => {
         assert.match(elements.packetLossChart.getAttribute("aria-label"), /No history available/i);
     });
 
-    test("7. Filter validation handles date and score bounds correctly", () => {
+    test("10. Filter validation handles date and score bounds correctly", () => {
         const valid = validateHistoryFilterValues({
             startDate: "2026-11-01",
             endDate: "2026-11-16",
@@ -216,7 +353,7 @@ describe("Network History Graphs & Charts Suite", () => {
         assert.equal(reversedDate.valid, false);
     });
 
-    test("8. exportHistoryToCSV preserves compatibility and exports all network fields", () => {
+    test("11. exportHistoryToCSV preserves compatibility and exports all network fields with safe timestamps", () => {
         let createdBlob = null;
         let downloadedFileName = "";
 

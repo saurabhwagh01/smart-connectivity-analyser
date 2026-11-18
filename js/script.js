@@ -1026,11 +1026,41 @@ function bearingToDirection(bearing) {
    CHART.JS
    ========================================================= */
 
+function destroyCharts() {
+    const charts = [
+        { get: () => networkChart, set: (v) => { networkChart = v; } },
+        { get: () => downloadChart, set: (v) => { downloadChart = v; } },
+        { get: () => uploadChart, set: (v) => { uploadChart = v; } },
+        { get: () => pingChart, set: (v) => { pingChart = v; } },
+        { get: () => jitterChart, set: (v) => { jitterChart = v; } },
+        { get: () => packetLossChart, set: (v) => { packetLossChart = v; } }
+    ];
+
+    for (const item of charts) {
+        const instance = item.get();
+        if (instance && typeof instance.destroy === "function") {
+            try {
+                instance.destroy();
+            } catch (err) {
+                console.warn("Error destroying chart instance:", err);
+            }
+        }
+        item.set(null);
+    }
+}
+
 function createMetricHistoryChart(canvasId, label, color, bgColor, unit, yMin = 0, yMax = null) {
     const canvas = $(canvasId);
     if (!canvas) return null;
     const context = canvas.getContext("2d");
     if (!context) return null;
+
+    if (typeof Chart !== "undefined" && typeof Chart.getChart === "function") {
+        const existing = Chart.getChart(canvas);
+        if (existing && typeof existing.destroy === "function") {
+            existing.destroy();
+        }
+    }
 
     const yAxisConfig = {
         type: "linear",
@@ -1104,6 +1134,13 @@ function initializeChart() {
     }
 
     if (!networkChart) {
+        if (typeof Chart !== "undefined" && typeof Chart.getChart === "function") {
+            const existing = Chart.getChart(canvas);
+            if (existing && typeof existing.destroy === "function") {
+                existing.destroy();
+            }
+        }
+
         const context = canvas.getContext("2d");
 
         if (context) {
@@ -1253,12 +1290,22 @@ function initializeChart() {
    ========================================================= */
 
 function normalizeHistoryItem(item = {}) {
+    const rawTimestamp =
+        item.timestamp !== undefined ? item.timestamp :
+        item.created_at !== undefined ? item.created_at :
+        item.time !== undefined ? item.time :
+        null;
+
+    let validTimestamp = null;
+    if (rawTimestamp !== null && rawTimestamp !== undefined && rawTimestamp !== "") {
+        const parsed = Date.parse(rawTimestamp);
+        if (Number.isFinite(parsed)) {
+            validTimestamp = String(rawTimestamp);
+        }
+    }
+
     return {
-        timestamp:
-            item.timestamp ||
-            item.created_at ||
-            item.time ||
-            new Date().toISOString(),
+        timestamp: validTimestamp,
 
         download_mbps: firstValid(
             item.download_mbps,
@@ -3023,6 +3070,7 @@ if (typeof module !== "undefined" && module.exports) {
         exportHistoryToCSV,
         normalizeHistoryItem,
         initializeChart,
+        destroyCharts,
         updateHistoryChart,
         smartConnectivity,
         resolveNetworkType,
