@@ -54,7 +54,119 @@ FEATURES = [
 SEQUENCE_LENGTH = 8
 
 MIN_TRAINING_RECORDS = 50
+# ============================================================
+# ANOMALY THRESHOLD CALIBRATION
+# ============================================================
 
+ANOMALY_CALIBRATION_PATH = MODEL_DIR / "anomaly_calibration.json"
+
+ANOMALY_TRAIN_RATIO = 0.80
+MIN_VALIDATION_RECORDS = 5
+
+
+def chronological_split(data, train_ratio=ANOMALY_TRAIN_RATIO):
+    """Split time-ordered records without shuffling."""
+
+    if not 0 < train_ratio < 1:
+        raise ValueError("train_ratio must be between 0 and 1.")
+
+    if len(data) < MIN_TRAINING_RECORDS + MIN_VALIDATION_RECORDS:
+        raise ValueError(
+            "Insufficient records for chronological training "
+            "and validation."
+        )
+
+    split_index = int(len(data) * train_ratio)
+
+    if split_index < MIN_TRAINING_RECORDS:
+        raise ValueError("Insufficient training records.")
+
+    if len(data) - split_index < MIN_VALIDATION_RECORDS:
+        raise ValueError("Insufficient validation records.")
+
+    return data[:split_index], data[split_index:]
+
+
+def calculate_anomaly_threshold(
+    errors,
+    strategy="percentile",
+    percentile=95,
+    std_multiplier=2.0,
+):
+    """Calculate a threshold from independent validation errors."""
+
+    values = [float(value) for value in errors]
+
+    if not values or not all(math.isfinite(value) for value in values):
+        raise ValueError("Errors must be non-empty and finite.")
+
+    if any(value < 0 for value in values):
+        raise ValueError("Reconstruction errors cannot be negative.")
+
+    if strategy == "percentile":
+        if not 0 < percentile <= 100:
+            raise ValueError("percentile must be in (0, 100].")
+
+        ordered = sorted(values)
+        position = (percentile / 100) * (len(ordered) - 1)
+        lower = math.floor(position)
+        upper = math.ceil(position)
+
+        threshold = (
+            ordered[lower]
+            + (ordered[upper] - ordered[lower])
+            * (position - lower)
+        )
+
+    elif strategy == "mean_std":
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        threshold = mean + std_multiplier * math.sqrt(variance)
+
+    else:
+        raise ValueError(
+            "strategy must be 'percentile' or 'mean_std'."
+        )
+
+    return float(threshold)
+
+
+def summarize_reconstruction_errors(errors):
+    """Return descriptive statistics for reconstruction errors."""
+
+    values = [float(value) for value in errors]
+
+    if not values or not all(math.isfinite(value) for value in values):
+        raise ValueError("Errors must be non-empty and finite.")
+
+    ordered = sorted(values)
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+
+    return {
+        "count": len(values),
+        "mean": mean,
+        "std": math.sqrt(variance),
+        "min": ordered[0],
+        "max": ordered[-1],
+    }
+
+
+def compare_anomaly_thresholds(validation_errors):
+    """Compare supported calibration strategies on the same validation set."""
+
+    return {
+        "percentile": calculate_anomaly_threshold(
+            validation_errors,
+            strategy="percentile",
+            percentile=95,
+        ),
+        "mean_std": calculate_anomaly_threshold(
+            validation_errors,
+            strategy="mean_std",
+            std_multiplier=2.0,
+        ),
+    }
 
 # ============================================================
 # DATABASE
@@ -587,32 +699,33 @@ def train_prediction_model(
 
 def train_anomaly_model(
     epochs=100,
-    learning_rate=0.001
+    learning_rate=0.001,
+    threshold_strategy="percentile",
+    percentile=95,
+    std_multiplier=2.0,
 ):
+    """Train on earlier records and calibrate on later validation records."""
 
     data = load_network_data()
 
-    if len(data) < MIN_TRAINING_RECORDS:
-
+    try:
+        train_data, validation_data = chronological_split(data)
+    except ValueError as error:
         return {
             "success": False,
-            "message": (
-                f"Insufficient training data. "
-                f"{len(data)}/{MIN_TRAINING_RECORDS} "
-                f"records available."
-            ),
+            "message": str(error),
             "records": len(data),
-            "minimum_required": MIN_TRAINING_RECORDS,
+            "minimum_required": (
+                MIN_TRAINING_RECORDS + MIN_VALIDATION_RECORDS
+            ),
         }
 
-    scaler = calculate_scaler(data)
+    # Fit normalization exclusively on training data.
+    scaler = calculate_scaler(train_data)
 
     normalized = [
-        normalize_values(
-            item["values"],
-            scaler
-        )
-        for item in data
+        normalize_values(item["values"], scaler)
+        for item in train_data
     ]
 
     inputs = torch.tensor(
@@ -620,6 +733,7 @@ def train_anomaly_model(
         dtype=torch.float32
     ).unsqueeze(1)
 
+    torch.manual_seed(42)
     model = TransformerAutoencoder()
 
     optimizer = torch.optim.Adam(
@@ -628,55 +742,125 @@ def train_anomaly_model(
     )
 
     loss_function = nn.MSELoss()
-
     model.train()
-
     final_loss = None
 
-    for epoch in range(epochs):
-
+    for _ in range(epochs):
         optimizer.zero_grad()
 
-        reconstructed = model(
-            inputs
-        )
-
+        reconstructed = model(inputs)
         target = inputs[:, -1, :]
 
-        loss = loss_function(
-            reconstructed,
-            target
-        )
-
+        loss = loss_function(reconstructed, target)
         loss.backward()
-
         optimizer.step()
 
-        final_loss = float(
-            loss.item()
+        final_loss = float(loss.item())
+
+    # Calibrate exclusively on unseen, later validation records.
+    validation_normalized = [
+        normalize_values(item["values"], scaler)
+        for item in validation_data
+    ]
+
+    validation_inputs = torch.tensor(
+        validation_normalized,
+        dtype=torch.float32
+    ).unsqueeze(1)
+
+    model.eval()
+
+    with torch.no_grad():
+        reconstructed = model(validation_inputs)
+        targets = validation_inputs[:, -1, :]
+
+        validation_errors = torch.mean(
+            (reconstructed - targets) ** 2,
+            dim=1
+        ).tolist()
+
+    thresholds = compare_anomaly_thresholds(validation_errors)
+
+    if threshold_strategy not in thresholds:
+        return {
+            "success": False,
+            "message": (
+                "threshold_strategy must be 'percentile' "
+                "or 'mean_std'."
+            ),
+        }
+
+    if threshold_strategy == "percentile":
+        threshold = calculate_anomaly_threshold(
+            validation_errors,
+            strategy="percentile",
+            percentile=percentile,
+        )
+    else:
+        threshold = calculate_anomaly_threshold(
+            validation_errors,
+            strategy="mean_std",
+            std_multiplier=std_multiplier,
         )
 
-    torch.save(
-        model.state_dict(),
-        ANOMALY_MODEL_PATH
-    )
+    calibration = {
+        "threshold": threshold,
+        "strategy": threshold_strategy,
+        "percentile": percentile,
+        "std_multiplier": std_multiplier,
+        "training_records": len(train_data),
+        "validation_records": len(validation_data),
+        "validation_error_summary": summarize_reconstruction_errors(
+            validation_errors
+        ),
+        "comparison": thresholds,
+        "train_ratio": ANOMALY_TRAIN_RATIO,
+    }
 
-    save_scaler(
-        scaler
-    )
+    # Save the model, scaler and calibration metadata.
+    model_temp = ANOMALY_MODEL_PATH.with_suffix(".tmp")
+    scaler_temp = SCALER_PATH.with_suffix(".tmp")
+    calibration_temp = ANOMALY_CALIBRATION_PATH.with_suffix(".tmp")
+
+    try:
+        torch.save(model.state_dict(), model_temp)
+
+        with open(scaler_temp, "w", encoding="utf-8") as file:
+            json.dump(scaler, file, indent=2)
+
+        with open(calibration_temp, "w", encoding="utf-8") as file:
+            json.dump(calibration, file, indent=2)
+
+        model_temp.replace(ANOMALY_MODEL_PATH)
+        scaler_temp.replace(SCALER_PATH)
+        calibration_temp.replace(ANOMALY_CALIBRATION_PATH)
+
+    finally:
+        for temporary_file in (
+            model_temp,
+            scaler_temp,
+            calibration_temp,
+        ):
+            if temporary_file.exists():
+                temporary_file.unlink()
 
     return {
         "success": True,
         "model": "Transformer Autoencoder",
         "records": len(data),
+        "training_records": len(train_data),
+        "validation_records": len(validation_data),
         "epochs": epochs,
         "final_loss": final_loss,
-        "model_path": str(
-            ANOMALY_MODEL_PATH
-        ),
+        "threshold": threshold,
+        "threshold_strategy": threshold_strategy,
+        "threshold_comparison": thresholds,
+        "validation_error_summary": calibration[
+            "validation_error_summary"
+        ],
+        "model_path": str(ANOMALY_MODEL_PATH),
+        "calibration_path": str(ANOMALY_CALIBRATION_PATH),
     }
-
-
 # ============================================================
 # COMPLETE TRAINING
 # ============================================================
