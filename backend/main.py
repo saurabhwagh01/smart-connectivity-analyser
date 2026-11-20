@@ -30,6 +30,9 @@ import subprocess
 import re
 
 import statistics
+import platform
+import shutil
+import socket
 from datetime import date, datetime, timedelta
 
 # ============================================================
@@ -597,432 +600,283 @@ PACKET_LOSS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# ============================================================
+# NETWORK QUALITY PROBING & PACKET LOSS MEASUREMENT
+# ============================================================
 
-def parse_ping_output(output):
-    """Return (ping_times_ms, packet_loss_percent) from ping output.
-
-    packet_loss_percent is None when no loss summary is found.
+def parse_ping_output(output: str, packet_count: int) -> dict:
     """
-    ping_times = [
-        float(value)
-        for value in PING_TIME_PATTERN.findall(output)
-    ]
-
-    loss_match = PACKET_LOSS_PATTERN.search(output)
-    packet_loss = float(loss_match.group(1)) if loss_match else None
-
-    return ping_times, packet_loss
-
-
-def build_ping_command(target, packet_count, timeout_seconds, system):
-    """Return the ping command for the given operating system.
-
-    system is a platform.system() value: "Windows", "Linux" or
-    "Darwin" (macOS). The target goes last, because macOS stops
-    reading options at the first non-option argument.
+    Parse ping command stdout across Windows, Linux, and macOS platforms.
+    Extracts individual ping response times, sent/received packet counts,
+    and calculates packet loss percentage using:
+        Packet Loss (%) = ((Packets Sent - Packets Received) / Packets Sent) * 100
     """
-    if system == "Windows":
-        # -n: number of pings, -w: reply timeout in milliseconds.
-        return [
-            "ping",
-            "-n", str(packet_count),
-            "-w", str(timeout_seconds * 1000),
+    if packet_count <= 0:
+        raise ValueError("packet_count must be greater than zero")
+
+    # 1. Parse individual ping round-trip times (ms)
+    matches = re.findall(
+        r"(?:time|temps|tiempo|zeit)[=<]\s*(\d+(?:\.\d+)?)\s*ms",
+        output,
+        re.IGNORECASE,
+    )
+    ping_times = []
+    for match in matches:
+        try:
+            ping_times.append(float(match))
+        except ValueError:
+            pass
+
+    # 2. Parse packets sent from output
+    sent_match = re.search(
+        r"(?:Sent|Enviados|Envoy[eé]s|Gesendet)\s*=\s*(\d+)",
+        output,
+        re.IGNORECASE,
+    )
+    if not sent_match:
+        sent_match = re.search(
+            r"(\d+)\s*(?:packets\s+transmitted|paquets\s+transmis|Pakete\s+übertragen)",
+            output,
+            re.IGNORECASE,
+        )
+    packets_sent = int(sent_match.group(1)) if sent_match else packet_count
+
+    # 3. Parse packets received from output
+    rec_match = re.search(
+        r"(?:Received|Recibidos|Re[cç]us|Empfangen)\s*=\s*(\d+)",
+        output,
+        re.IGNORECASE,
+    )
+    if not rec_match:
+        rec_match = re.search(
+            r"(\d+)\s*(?:packets\s+)?(?:received|recibidos|re[cç]us|empfangen)",
+            output,
+            re.IGNORECASE,
+        )
+    if rec_match:
+        packets_received = int(rec_match.group(1))
+    else:
+        packets_received = len(ping_times)
+
+    # 4. Check for system-reported packet loss percentage
+    loss_match = re.search(
+        r"\((\d+(?:\.\d+)?)%\s*(?:loss|perte|perdidos|Verlust)\)",
+        output,
+        re.IGNORECASE,
+    )
+    if not loss_match:
+        loss_match = re.search(
+            r"(\d+(?:\.\d+)?)\s*%\s*(?:packet\s*)?(?:loss|perte|perdidos|Verlust)",
+            output,
+            re.IGNORECASE,
+        )
+
+    # 5. Calculate packet loss percentage accurately
+    if packets_sent > 0:
+        calculated_loss = ((packets_sent - packets_received) / packets_sent) * 100.0
+    else:
+        calculated_loss = 0.0
+
+    if packets_received == 0:
+        packet_loss = 100.0
+    elif loss_match:
+        packet_loss = float(loss_match.group(1))
+    else:
+        packet_loss = calculated_loss
+
+    # Ensure bounds [0.0, 100.0]
+    packet_loss = max(0.0, min(100.0, float(packet_loss)))
+
+    return {
+        "packets_sent": packets_sent,
+        "packets_received": packets_received,
+        "packet_loss": round(packet_loss, 2),
+        "ping_times": ping_times,
+    }
+
+
+def execute_network_ping(
+    target: str = "1.1.1.1",
+    packet_count: int = 10,
+    timeout_ms: int = 2000,
+) -> dict:
+    """
+    Executes actual network probes using the platform ping utility.
+    Safely resolves host, detects platform, executes subprocess without shell injection,
+    and returns parsed results. Raises appropriate HTTPExceptions on failure.
+    """
+    if packet_count <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="packet_count must be greater than zero",
+        )
+
+    # Validate DNS / host reachability before executing probe
+    try:
+        socket.gethostbyname(target)
+    except socket.gaierror as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"DNS resolution failed for target host '{target}': {error}",
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Host validation failed for '{target}': {error}",
+        )
+
+    # Check that ping utility exists on the system
+    ping_executable = shutil.which("ping")
+    if not ping_executable:
+        raise HTTPException(
+            status_code=501,
+            detail="Ping utility executable not found on the system.",
+        )
+
+    current_os = platform.system().lower()
+    if "windows" in current_os:
+        command = [
+            ping_executable,
+            target,
+            "-n",
+            str(packet_count),
+            "-w",
+            str(timeout_ms),
+        ]
+    elif "darwin" in current_os:
+        timeout_sec = max(1, int(math.ceil(timeout_ms / 1000.0)))
+        command = [
+            ping_executable,
+            "-c",
+            str(packet_count),
+            "-W",
+            str(timeout_ms),
+            target,
+        ]
+    elif "linux" in current_os:
+        timeout_sec = max(1, int(math.ceil(timeout_ms / 1000.0)))
+        command = [
+            ping_executable,
+            "-c",
+            str(packet_count),
+            "-W",
+            str(timeout_sec),
+            target,
+        ]
+    else:
+        command = [
+            ping_executable,
+            "-c",
+            str(packet_count),
             target,
         ]
 
-    if system == "Darwin":
-        # -c: number of pings, -W: reply timeout in milliseconds.
-        return [
-            "ping",
-            "-c", str(packet_count),
-            "-W", str(timeout_seconds * 1000),
-            target,
-        ]
+    # Subprocess execution timeout
+    execution_timeout = max(30, int((packet_count * timeout_ms) / 1000) + 10)
 
-    # Linux and other Unix-like systems.
-    # -c: number of pings, -W: reply timeout in seconds.
-    return [
-        "ping",
-        "-c", str(packet_count),
-        "-W", str(timeout_seconds),
-        target,
-    ]
+    try:
+        process = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=execution_timeout,
+        )
+        output = process.stdout or ""
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=504,
+            detail="Ping measurement timed out.",
+        )
+    except PermissionError as error:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Ping permission denied: {error}",
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ping measurement failed: {error}",
+        )
 
-
-# ============================================================
-
-# NETWORK QUALITY
-
-# ============================================================
-
+    return parse_ping_output(output, packet_count)
 
 
 @app.get("/api/network-quality")
-
-def network_quality():
-
-
-
-    target = "1.1.1.1"
-
-
-
+def network_quality(target: str = "8.8.8.8"):
     packet_count = 10
+    timeout_ms = 2000
 
-
-
-    timeout_seconds = 2
-
-    command = build_ping_command(
-        target,
-        packet_count,
-        timeout_seconds,
-        platform.system(),
+    parsed = execute_network_ping(
+        target=target,
+        packet_count=packet_count,
+        timeout_ms=timeout_ms,
     )
 
-
-
-    try:
-
-
-
-        process = subprocess.run(
-
-            command,
-
-            capture_output=True,
-
-            text=True,
-
-            timeout=30
-
-        )
-
-
-
-        output = process.stdout
-
-
-
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=503,
-            detail="The ping command is not available on this server.",
-        )
-
-    except subprocess.TimeoutExpired:
-
-
-
-        raise HTTPException(
-
-            status_code=504,
-
-            detail="Ping measurement timed out."
-
-        )
-
-
-
-    except Exception as error:
-
-
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=f"Ping measurement failed: {error}"
-
-        )
-
-
-
+    packets_sent = parsed["packets_sent"]
+    packets_received = parsed["packets_received"]
+    packet_loss = parsed["packet_loss"]
+    ping_times = parsed["ping_times"]
 
     # ========================================================
-    # PARSE PING TIMES AND PACKET LOSS
+    # NO RESPONSE / 100% PACKET LOSS
     # ========================================================
-
-    ping_times, packet_loss = parse_ping_output(output)
-
-    # No replies and no loss summary means ping failed to run
-    # (for example, no permission to send pings). That is not
-    # the same as a real 100% packet loss.
-    if not ping_times and packet_loss is None:
-        reason = process.stderr.strip() or "ping produced no output"
-        raise HTTPException(
-            status_code=503,
-            detail=f"Ping measurement failed: {reason}",
-        )
-
-
-    # If ping printed no loss summary, estimate it from
-    # how many replies were received.
-    if packet_loss is None:
-        packet_loss = (
-            (packet_count - len(ping_times))
-            / packet_count
-        ) * 100
-
-
-    # ========================================================
-    # NO RESPONSE
-    # ========================================================
-
-
-
     if len(ping_times) == 0:
-
-
-
         return {
-
             "target": target,
-
-            "packets_sent": packet_count,
-
+            "packets_sent": packets_sent,
             "packets_received": 0,
-
             "packet_loss": 100.0,
-
             "ping_ms": None,
-
             "min_ping_ms": None,
-
             "max_ping_ms": None,
-
             "jitter_ms": None,
-
-            "status": "unreachable"
-
+            "samples": [],
+            "status": "unreachable",
         }
 
-
-
-
-
     # ========================================================
-
     # PING STATISTICS
+    # ========================================================
+    average_ping = statistics.mean(ping_times)
+    minimum_ping = min(ping_times)
+    maximum_ping = max(ping_times)
 
     # ========================================================
-
-
-
-    average_ping = statistics.mean(
-
-        ping_times
-
-    )
-
-
-
-    minimum_ping = min(
-
-        ping_times
-
-    )
-
-
-
-    maximum_ping = max(
-
-        ping_times
-
-    )
-
-
-
-
-
-    # ========================================================
-
     # JITTER
-
-    #
-
-    # Mean absolute difference between consecutive
-
-    # successful ping measurements.
-
+    # Mean absolute difference between consecutive successful ping measurements
     # ========================================================
-
-
-
     if len(ping_times) >= 2:
-
-
-
-        differences = []
-
-
-
-        for i in range(
-
-            1,
-
-            len(ping_times)
-
-        ):
-
-
-
-            difference = abs(
-
-                ping_times[i] -
-
-                ping_times[i - 1]
-
-            )
-
-
-
-            differences.append(
-
-                difference
-
-            )
-
-
-
-
-
-        jitter = statistics.mean(
-
-            differences
-
-        )
-
-
-
+        differences = [
+            abs(ping_times[i] - ping_times[i - 1])
+            for i in range(1, len(ping_times))
+        ]
+        jitter = statistics.mean(differences)
     else:
-
-
-
         jitter = 0.0
 
-
-
-
-
     # ========================================================
-
     # STATUS
-
     # ========================================================
-
-
-
     if average_ping <= 50:
-
-
-
         status = "excellent"
-
-
-
     elif average_ping <= 100:
-
-
-
         status = "good"
-
-
-
     elif average_ping <= 200:
-
-
-
         status = "average"
-
-
-
     else:
-
-
-
         status = "poor"
 
-
-
-
-
     return {
-
-
-
         "target": target,
-
-
-
-        "packets_sent": packet_count,
-
-
-
-        "packets_received": len(
-
-            ping_times
-
-        ),
-
-
-
-        "packet_loss": round(
-
-            packet_loss,
-
-            2
-
-        ),
-
-
-
-        "ping_ms": round(
-
-            average_ping,
-
-            2
-
-        ),
-
-
-
-        "min_ping_ms": round(
-
-            minimum_ping,
-
-            2
-
-        ),
-
-
-
-        "max_ping_ms": round(
-
-            maximum_ping,
-
-            2
-
-        ),
-
-
-
-        "jitter_ms": round(
-
-            jitter,
-
-            2
-
-        ),
-
-
-
+        "packets_sent": packets_sent,
+        "packets_received": packets_received,
+        "packet_loss": round(packet_loss, 2),
+        "ping_ms": round(average_ping, 2),
+        "min_ping_ms": round(minimum_ping, 2),
+        "max_ping_ms": round(maximum_ping, 2),
+        "jitter_ms": round(jitter, 2),
         "samples": ping_times,
-
-
-
-        "status": status
-
+        "status": status,
     }
 
 
