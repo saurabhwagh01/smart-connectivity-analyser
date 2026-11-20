@@ -2830,7 +2830,9 @@ if (typeof module !== "undefined" && module.exports) {
         loadNetworkHistory,
         smartConnectivity,
         resolveNetworkType,
-        detectNetworkType
+        detectNetworkType,
+        applyBackendMetrics,
+        currentMetrics
     };
 }
 /* =========================================================
