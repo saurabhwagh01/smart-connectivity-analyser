@@ -1,6 +1,6 @@
 # Contributing to Smart Internet Connectivity Analyser
 
-Thank you for your interest in contributing to Smart Internet Connectivity Analyser! Contributions from beginners and experienced developers are welcome.
+Thank you for your interest in contributing to **Smart Internet Connectivity Analyser**! Contributions from beginners and experienced developers are welcome.
 
 Please read these guidelines before making changes to the project.
 
@@ -26,63 +26,24 @@ Beginners can start with documentation improvements, small bug fixes, or clearly
 
 ## 3. Setting Up the Project Locally
 
-### Prerequisites
+Before contributing, follow the prerequisites and installation instructions in the [README.md — Getting Started](README.md#-getting-started) section.
 
-Install the following tools:
+The README provides instructions for:
 
-- Python and pip
-- Git
-- A modern web browser
-- Visual Studio Code or another code editor
+- Required software and prerequisites.
+- Cloning the repository.
+- Creating and activating a Python virtual environment.
+- Installing project dependencies.
+- Starting the FastAPI backend.
+- Opening the frontend and connecting it to the local API.
 
-Check the README for the recommended Python version and setup instructions.
-
-### Installation
-
-Clone the repository:
+For development and testing dependencies, run:
 
 ```bash
-git clone https://github.com/saurabhwagh01/smart-connectivity-analyser.git
-cd smart-connectivity-analyser
+python -m pip install -r requirements-dev.txt
 ```
 
-Create and activate a virtual environment.
-
-**Windows PowerShell:**
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-**macOS or Linux:**
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Install the required dependencies:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Start the backend:
-
-```bash
-python -m uvicorn backend.main:app --reload
-```
-
-The backend should be available at:
-
-`http://127.0.0.1:8000/`
-
-For API documentation, visit:
-
-`http://127.0.0.1:8000/docs`
-
-Follow the README instructions to open the frontend and configure its API connection for local development.
+Refer to the README's testing instructions for Python, JavaScript, and Playwright test commands.
 
 ## 4. Finding and Claiming Issues
 
@@ -116,31 +77,9 @@ Before submitting a pull request:
 2. Test the functionality affected by your changes.
 3. Check for errors in the browser console and backend terminal.
 4. Verify that existing features still work.
-5. Run the automated test suites and include relevant test results.
+5. Run the relevant automated test suites and include the results in your pull request.
 
 Do not claim that a test passed unless you actually ran it.
-
-### Running Automated Tests
-
-#### Unit Tests
-
-Run the dependency-free JavaScript unit tests before submitting changes:
-
-```bash
-npm test
-```
-
-#### Browser Tests
-
-The browser scenario tests require Playwright and Chromium:
-
-```bash
-npm install --no-save playwright
-npx playwright install --with-deps chromium
-npm run test:browser
-```
-
-For additional test options and instructions, see the [README.md](README.md#running-automated-tests).
 
 ### Testing Machine-Learning Features
 
@@ -153,6 +92,8 @@ For changes involving machine-learning functionality:
 - Do not claim improved accuracy without comparing results against a suitable baseline.
 - Document important preprocessing steps and assumptions.
 - Do not fabricate missing measurements or evaluation results.
+
+For exact test commands and additional testing instructions, refer to the [README.md — Testing and Verification](README.md#-testing-and-verification) section.
 
 ## 7. Pull Request Process
 
@@ -205,7 +146,7 @@ Examples:
 
 Use a prefix that describes the type of change when appropriate.
 
-## 🤖 Automatic Issue Assignment
+## 9. Automatic Issue Assignment
 
 To keep contributions organized and prevent duplicate work, this repository uses GitHub Actions for automatic issue assignment.
 
@@ -228,9 +169,7 @@ To keep contributions organized and prevent duplicate work, this repository uses
 - If you cannot complete an assigned issue, inform the project maintainers so the issue can be reassigned.
 - Automatic assignment does not guarantee that a pull request will be accepted; all contributions are subject to review.
 
-Thank you for contributing to Smart Connectivity Analyser! 🚀
-
-## 9. AI-Assisted Contributions
+## 10. AI-Assisted Contributions
 
 If you use AI tools while contributing:
 
@@ -243,7 +182,7 @@ If you use AI tools while contributing:
 
 If the project maintainers publish a more specific AI-use policy, follow that policy.
 
-## 10. Code of Conduct
+## 11. Code of Conduct
 
 Be respectful, welcoming, and constructive when communicating with maintainers and other contributors.
 
@@ -255,7 +194,7 @@ Be respectful, welcoming, and constructive when communicating with maintainers a
 
 Contributors are expected to maintain a collaborative and inclusive environment.
 
-## 11. Questions and Support
+## 12. Questions and Support
 
 For project-specific questions, open or comment on a relevant GitHub issue.
 
@@ -268,4 +207,6 @@ For bugs or feature requests:
 
 Avoid sharing passwords, API keys, private information, or other sensitive data in public issues.
 
-Thank you for helping improve Smart Internet Connectivity Analyser!
+---
+
+Thank you for helping improve **Smart Internet Connectivity Analyser!** 🚀

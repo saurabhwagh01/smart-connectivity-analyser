@@ -122,6 +122,18 @@ function formatMetric(value, unitOrDecimals = "", decimals = 1) {
 
 // ─── Metric Validation & Formatting Helpers ────────────
 
+/*
+   The shared, unit-tested scoring function from
+   js/connectivity-score.js. index.html loads that module before
+   this file, so the browser uses the global it defines; the Node
+   tests require it directly here.
+*/
+
+const sharedCalculateConnectivityScore =
+    typeof calculateConnectivityScore !== "undefined"
+        ? calculateConnectivityScore
+        : require("./connectivity-score.js").calculateConnectivityScore;
+
 function isValidMetricNumber(value) {
     if (
         value === null ||
@@ -381,7 +393,7 @@ function resolveDashboardDisplayState(
 
     const score = Number.isFinite(Number(metrics.score))
         ? Math.max(0, Number(metrics.score))
-        : calculateConnectivityScore(metrics);
+        : sharedCalculateConnectivityScore(metrics);
 
     return {
         download: formatMetric(metrics.download),
@@ -1689,7 +1701,7 @@ async function startNetworkTest() {
         detectNetworkType();
 
         currentMetrics.score =
-            calculateConnectivityScore(currentMetrics);
+            sharedCalculateConnectivityScore(currentMetrics);
 
         lastTestTime = new Date().toISOString();
 
@@ -2105,47 +2117,6 @@ async function measureBrowserLatency() {
    CONNECTIVITY SCORE
    ========================================================= */
 
-function calculateConnectivityScore(metrics) {
-    const components = [];
-
-    if (isValidMetric(metrics.download)) {
-        components.push(
-            Math.min(100, Math.max(0, Number(metrics.download)))
-        );
-    }
-
-    if (isValidMetric(metrics.upload)) {
-        components.push(
-            Math.min(100, Math.max(0, Number(metrics.upload) * 2))
-        );
-    }
-
-    if (isValidMetric(metrics.ping)) {
-        components.push(
-            Math.max(0, 100 - Number(metrics.ping) * 0.6)
-        );
-    }
-
-    if (isValidMetric(metrics.jitter)) {
-        components.push(
-            Math.max(0, 100 - Number(metrics.jitter) * 1.5)
-        );
-    }
-
-    if (isValidMetric(metrics.packetLoss)) {
-        components.push(
-            Math.max(0, 100 - Number(metrics.packetLoss) * 10)
-        );
-    }
-
-    if (!components.length) return 0;
-
-    return Math.round(
-        components.reduce((sum, value) => sum + value, 0) /
-        components.length
-    );
-}
-
 function getConnectivityStatus(score) {
     return resolveConnectivityIndicator(score, {
         isOffline: isDeviceOffline()
@@ -2163,7 +2134,7 @@ function updateDashboard() {
         currentMetrics.score = 0;
     } else {
         currentMetrics.score =
-            calculateConnectivityScore(currentMetrics);
+            sharedCalculateConnectivityScore(currentMetrics);
     }
 
     const display = resolveDashboardDisplayState(currentMetrics, {
@@ -2757,7 +2728,7 @@ const smartConnectivity = {
     startNetworkTest,
     exportHistoryToCSV,
     validateHistoryFilterValues,
-    calculateConnectivityScore,
+    calculateConnectivityScore: sharedCalculateConnectivityScore,
     getConnectivityStatus,
     resolveConnectivityIndicator,
     resolveDashboardDisplayState,
@@ -2775,7 +2746,7 @@ if (typeof window !== "undefined") {
     window.smartConnectivity = smartConnectivity;
 
     window.calculateConnectivityScore =
-        calculateConnectivityScore;
+        sharedCalculateConnectivityScore;
 
     window.getConnectivityStatus =
         getConnectivityStatus;
@@ -2817,7 +2788,7 @@ if (typeof module !== "undefined" && module.exports) {
         formatMetric,
         formatNetworkMetric,
         validateHistoryFilterValues,
-        calculateConnectivityScore,
+        calculateConnectivityScore: sharedCalculateConnectivityScore,
         getConnectivityStatus,
         resolveConnectivityIndicator,
         resolveDashboardDisplayState,

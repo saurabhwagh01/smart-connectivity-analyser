@@ -24,6 +24,7 @@ import json
 import math
 import sys
 
+import platform
 import subprocess
 
 import re
@@ -581,16 +582,23 @@ def ping():
 
 
 
-
+# ============================================================
+# PING OUTPUT PARSING
 # ============================================================
 
-# NETWORK QUALITY
+# Matches one reply's round-trip time on Windows ("time=12ms",
+# "time<1ms") and Linux/macOS ("time=12.4 ms").
+PING_TIME_PATTERN = re.compile(
+    r"time[=<]\s*(\d+(?:\.\d+)?)\s*ms",
+    re.IGNORECASE,
+)
 
-# WINDOWS PING
-
-# ============================================================
-
-
+# Matches the packet-loss summary on Windows ("(0% loss)"),
+# Linux ("25% packet loss") and macOS ("0.0% packet loss").
+PACKET_LOSS_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)%\s*(?:packet\s+)?loss",
+    re.IGNORECASE,
+)
 
 # ============================================================
 # NETWORK QUALITY PROBING & PACKET LOSS MEASUREMENT

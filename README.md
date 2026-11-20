@@ -40,7 +40,7 @@ Internet connectivity can vary because of network congestion, signal conditions,
 - 🔍 **Anomaly Detection:** Use a Transformer Autoencoder to calculate reconstruction errors and flag records that exceed a configured threshold.
 - 🗄️ **Data Persistence:** Store supported network test records in an SQLite database.
 - ⚡ **REST API:** Access network measurements, history, prediction, and anomaly analysis through FastAPI endpoints.
-- ♿ **Accessibility:** Use the dashboard with a keyboard (skip link, visible focus indicators, a Start Test button that keeps focus during a test), with labelled controls, progress bars and charts for screen readers, text and control borders that meet WCAG AA contrast, and status and error messages that are announced and explain what to do next.
+- ♿ **Accessibility:** Use the dashboard with a keyboard, labelled controls, visible focus indicators, accessible charts and progress indicators, and screen-reader announcements for status and error messages.
 
 > **AI limitations:** Prediction and anomaly detection are experimental. Their performance must be evaluated on suitable test data. Anomaly detection requires validation against labelled normal and anomalous examples. Results may be unavailable when there are not enough complete records.
 
@@ -108,12 +108,16 @@ flowchart TD
 
 ## 📋 Prerequisites
 
-- Python compatible with the dependencies listed in `requirements.txt`.
-- Git.
-- A modern web browser.
-- pip, the Python package installer.
+Before running the project locally, make sure you have:
 
-**Python compatibility note:** PyTorch and other dependencies may have operating-system and Python-version requirements. If installation fails, check the dependency versions and use a supported Python environment.
+- Python compatible with the dependencies listed in `requirements.txt`.
+- pip, the Python package installer.
+- Git.
+- Node.js 18 or newer for JavaScript tests and the complete Python test suite.
+- A modern web browser.
+- Visual Studio Code or another code editor (VS Code Live Server is recommended for the frontend).
+
+**Python compatibility:** PyTorch and other dependencies may have operating-system and Python-version requirements. If installation fails, check the dependency versions and use a supported Python environment.
 
 ## 🚀 Getting Started
 
@@ -124,7 +128,9 @@ git clone https://github.com/saurabhwagh01/smart-connectivity-analyser.git
 cd smart-connectivity-analyser
 ```
 
-### 2. Create a Virtual Environment
+### 2. Set Up the Python Environment
+
+Create a virtual environment before installing dependencies.
 
 **Windows PowerShell:**
 
@@ -133,11 +139,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell blocks activation, you can use the environment's Python executable directly:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
+If PowerShell blocks activation, use the virtual environment's Python executable directly for subsequent commands.
 
 **macOS / Linux:**
 
@@ -146,36 +148,63 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Install Dependencies
+### 3. Install Backend Dependencies
 
-Run from the project root:
+From the project root, run:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 4. Run the Backend
+If you are using the Windows activation fallback, run:
 
-From the project root:
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### 4. Start the Backend
+
+From the project root, run:
 
 ```bash
 python -m uvicorn backend.main:app --reload
 ```
 
-The backend API should be available at:
+If PowerShell activation is blocked, use the virtual environment's Python executable:
 
-- **API health check:** http://127.0.0.1:8000/api/health
-- **Interactive API documentation:** http://127.0.0.1:8000/docs
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+```
 
-The root address `http://127.0.0.1:8000/` is an application page only if the backend is configured to serve one.
+The FastAPI backend should now be available at:
+
+- **API health check:** [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+- **Interactive API documentation:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+Keep the backend terminal running while using the frontend.
 
 ### 5. Open the Frontend
 
-If you use the VS Code Live Server extension, open `index.html` with Live Server. Alternatively, use the static web server configured for your project.
+The frontend is a static web application.
 
-Make sure the frontend's API configuration points to the local FastAPI backend. Live Server may use a different port from the backend.
+1. Open the project folder in Visual Studio Code.
+2. Open `index.html`.
+3. Start the page using the VS Code Live Server extension.
+4. Open the local URL provided by Live Server in your browser.
 
-**AI models:** AI features may require the expected model files and enough complete network records. Check the AI status endpoint if predictions or anomaly analysis are unavailable.
+The frontend and backend may run on different local ports.
+
+**API configuration:** By default, the frontend sends API requests to:
+
+```text
+http://127.0.0.1:8000/api
+```
+
+The API base URL can be overridden by setting `window.API_BASE` before `js/script.js` loads.
+
+Make sure the backend is running before using frontend features that require API requests.
+
+**AI features:** Predictions and anomaly analysis may require the expected model files and sufficient complete network records. Check the AI status endpoint if these features are unavailable.
 
 ## 🔌 API Endpoints
 
@@ -219,71 +248,89 @@ The detector has not yet been fully validated against labelled normal and anomal
 
 ## 🧪 Testing and Verification
 
-Run the automated API tests:
+The project includes Python tests, JavaScript frontend unit tests, and Playwright browser tests. Run the relevant test suites after making changes.
+
+### 1. Python Backend Tests
+
+Install the development dependencies from the project root:
 
 ```bash
 python -m pip install -r requirements-dev.txt
+```
+
+Run the complete Python test suite:
+
+```bash
 python -m pytest tests
 ```
 
-Before submitting a change, where applicable:
+To run an individual test file:
 
-- Start the backend and check `/api/health`.
-- Verify that network test records can be saved and retrieved.
-- Check that historical charts display available records.
-- Test AI endpoints with enough complete records.
-- Confirm that unavailable measurements are not silently treated as real zero values.
-- Check browser developer tools and backend output for errors.
+```bash
+python -m pytest tests/test_network_test_validation.py
+```
 
-### Running Automated Tests
+**Note:** The complete Python test suite also includes a wrapper that executes the JavaScript metric-formatting tests. Node.js must therefore be available when running the complete suite.
 
-#### Unit Tests (No Playwright Required)
+### 2. JavaScript Frontend Unit Tests
 
-The repository includes test suites verifying that:
-- Supported network metrics (download, upload, ping, jitter, packet loss) format correctly with units.
-- Missing or unavailable values (`null`, `undefined`, `NaN`, empty strings) are consistently rendered as `"Unavailable"` or `"--"`.
-- Valid zero values (e.g. `0.0 Mbps`, `0.0 ms`, and `0.0 %` packet loss) are displayed correctly.
-- Unavailable values are never incorrectly displayed as zero.
+Node.js 18 or newer is required. These tests use Node.js's built-in test runner and do not require additional npm packages.
 
-Run the dependency-free frontend unit tests from the project root:
+Run all default frontend unit tests from the project root:
 
 ```bash
 npm test
 ```
 
-This runs the connectivity score, metric formatting, and history filter suites with Node's built-in test runner. No packages need to be installed. Node.js 18 or newer is required.
+This runs the following test files:
 
-To run individual unit-test files from the `tests/` directory:
+- `tests/connectivity-score.test.js`
+- `tests/metric_formatting.test.js`
+- `tests/history-filters.test.js`
 
-```bash
-cd tests
-node --test connectivity-score.test.js
-node --test metric_formatting.test.js
-node --test history-filters.test.js
-cd ..
-```
-
-These commands only load the listed unit-test files. They do not load the Playwright-dependent browser scenario.
-
-The metric formatting suite can also be run with pytest:
+To run an individual test file:
 
 ```bash
-pytest tests/test_frontend_metric_formatting.py
+node --test tests/connectivity-score.test.js
+node --test tests/metric_formatting.test.js
+node --test tests/history-filters.test.js
 ```
 
-#### Browser Scenario Tests
+### 3. Playwright Browser Tests
 
-The dashboard empty-state, API error, populated history, and AI fallback scenarios run in Chromium and require Playwright:
+Browser scenario tests use Playwright and Chromium. They cover dashboard empty states, API errors, populated history, and AI fallback behaviour.
+
+Install Playwright and its Chromium browser:
 
 ```bash
 npm install --no-save playwright
-npx playwright install --with-deps chromium
+npx playwright install chromium
+```
+
+Run the browser tests:
+
+```bash
 npm run test:browser
 ```
 
-These browser checks are also run in CI by the Issue 5 focused checks workflow.
+On Linux systems that need additional browser dependencies, use:
 
-For research or performance claims, evaluate models using a reproducible test split and compare them with suitable baseline methods. Report the metrics actually obtained; do not claim accuracy or anomaly-detection performance that has not been demonstrated.
+```bash
+npx playwright install --with-deps chromium
+```
+
+### 4. Manual Verification
+
+When applicable, verify the following before submitting changes:
+
+- Start the backend and check `/api/health`.
+- Verify that network test records can be saved and retrieved.
+- Check that historical charts display available records.
+- Test AI endpoints with sufficient complete records.
+- Confirm that unavailable measurements are not silently treated as real zero values.
+- Check browser developer tools and backend output for errors.
+
+For research or performance claims, use a reproducible test split and suitable baseline methods. Report only metrics that have actually been measured.
 
 ## 📁 Project Structure
 
@@ -334,7 +381,7 @@ Contributions from beginners and experienced developers are welcome!
 
 You can contribute to frontend development, backend functionality, machine-learning evaluation, testing, bug fixes, and documentation.
 
-1. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions and contribution guidelines.
+1. Read [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 2. Explore the [open GitHub Issues](https://github.com/saurabhwagh01/smart-connectivity-analyser/issues).
 3. Choose an issue that matches your skills and interests.
 4. Read the issue description and acceptance criteria carefully.
