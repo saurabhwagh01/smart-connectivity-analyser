@@ -45,12 +45,81 @@ async function openScenario(browser, scenario, viewport = { width: 1440, height:
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify(scenario === "populated" || scenario === "ai-fallback" ? sampleHistory : [])
+          body: JSON.stringify(
+            scenario === "populated" ||
+            scenario === "ai-fallback" ||
+            scenario === "ai-explanation"
+              ? sampleHistory
+              : []
+          )
         });
       }
       return;
     }
     if (url.pathname.endsWith("/ai/analyze")) {
+      if (scenario === "ai-explanation") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true,
+            prediction: {
+              predicted_connectivity_score: 82,
+              predicted_quality: "Good"
+            },
+            anomaly: {
+              success: true,
+              anomaly: true,
+              reconstruction_error: 0.4,
+              threshold: 0.1,
+              status: "Anomaly detected",
+              explanation: {
+                normalization: "share_of_five_metric_squared_errors",
+                metrics: [
+                  {
+                    feature: "ping_ms",
+                    observed_value: 180,
+                    reconstructed_value: 24,
+                    absolute_error: 156,
+                    normalized_error: 2.4,
+                    contribution_percent: 58,
+                    rank: 1
+                  },
+                  {
+                    feature: "packet_loss",
+                    observed_value: 8,
+                    reconstructed_value: 0.5,
+                    absolute_error: 7.5,
+                    normalized_error: 1.8,
+                    contribution_percent: 32,
+                    rank: 2
+                  },
+                  {
+                    feature: "upload_mbps",
+                    observed_value: 3,
+                    reconstructed_value: 8,
+                    absolute_error: 5,
+                    normalized_error: 0.9,
+                    contribution_percent: 8,
+                    rank: 3
+                  },
+                  {
+                    feature: "download_mbps",
+                    observed_value: 20,
+                    reconstructed_value: 24,
+                    absolute_error: 4,
+                    normalized_error: 0.5,
+                    contribution_percent: 2,
+                    rank: 4
+                  }
+                ]
+              }
+            }
+          })
+        });
+        return;
+      }
+
       await route.fulfill({
         status: 503,
         contentType: "application/json",
@@ -125,10 +194,57 @@ async function openScenario(browser, scenario, viewport = { width: 1440, height:
     const fallbackText = await ai.locator("#predictionResult").innerText();
     assert.match(fallbackText, /AI service is unavailable\. Showing local analysis/i);
     assert.match(fallbackText, /improving|declining|stable/i);
+    assert.equal(await ai.locator("#anomalyExplanation").isVisible(), false);
     await ai.screenshot({ path: path.join(output, "issue-5-ai-fallback.png"), fullPage: true });
     await ai.close();
 
-    console.log("All four Issue #5 browser scenarios passed, including both 390x844 mobile checks. Screenshots saved in artifacts/.");
+    const explained = await openScenario(browser, "ai-explanation");
+    const explanation = explained.locator("#anomalyExplanation");
+    await explained.waitForFunction(() => {
+      const list = document.getElementById("anomalyExplanation");
+      return list && !list.hidden && list.children.length === 3;
+    }, { timeout: 20000 });
+    await explained.evaluate(() => {
+      const notice = document.createElement("p");
+      notice.id = "demoMockDataNotice";
+      notice.setAttribute("role", "status");
+      notice.className =
+        "rounded-lg bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-900";
+      notice.textContent = "Demo only: using mock network data.";
+      document.querySelector("main").prepend(notice);
+    });
+    const explanationText = await explanation.innerText();
+    assert.match(
+      await explained.locator("#demoMockDataNotice").innerText(),
+      /mock network data/i
+    );
+    assert.match(
+      await explained.locator("#predictionResult").innerText(),
+      /Predicted connectivity score|improving trend/i
+    );
+    assert.doesNotMatch(
+      await explained.locator("#anomalyResult").innerText(),
+      /Waiting for network data/i
+    );
+    assert.doesNotMatch(
+      await explained.locator("#recommendation").innerText(),
+      /Connect to the Internet to begin network analysis/i
+    );
+    assert.match(explanationText, /Rank 1: Ping/);
+    assert.match(explanationText, /observed 180\.00 ms/);
+    assert.match(explanationText, /58\.0% contribution/);
+    assert.match(explanationText, /Rank 2: Packet loss/);
+    assert.match(explanationText, /32\.0% contribution/);
+    assert.match(explanationText, /Rank 3: Upload speed/);
+    assert.match(explanationText, /8\.0% contribution/);
+    assert.doesNotMatch(explanationText, /Download speed/);
+    await explained.screenshot({
+      path: path.join(output, "issue-5-ai-explanation.png"),
+      fullPage: true
+    });
+    await explained.close();
+
+    console.log("All four Issue #5 browser scenarios passed, including both 390x844 mobile checks; AI explanation rendering passed. Screenshots saved in artifacts/.");
   } finally {
     await browser.close();
   }

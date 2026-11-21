@@ -54,6 +54,14 @@ const METRIC_UNITS = Object.freeze({
     packet_loss: "%"
 });
 
+const ANOMALY_METRIC_LABELS = Object.freeze({
+    download_mbps: "Download speed",
+    upload_mbps: "Upload speed",
+    ping_ms: "Ping",
+    jitter_ms: "Jitter",
+    packet_loss: "Packet loss"
+});
+
 /* =========================================================
    HELPERS
    ========================================================= */
@@ -2368,6 +2376,66 @@ function updateAIAnalysis() {
     }
 }
 
+function formatAnomalyMetric(metric) {
+    if (!metric || !ANOMALY_METRIC_LABELS[metric.feature]) {
+        return null;
+    }
+
+    const observed = safeNumber(metric.observed_value);
+    const reconstructed = safeNumber(metric.reconstructed_value);
+    const absoluteError = safeNumber(metric.absolute_error);
+    const normalizedError = safeNumber(metric.normalized_error);
+    const contribution = safeNumber(metric.contribution_percent);
+    const rank = safeNumber(metric.rank);
+
+    if (
+        observed === null ||
+        reconstructed === null ||
+        absoluteError === null ||
+        normalizedError === null ||
+        contribution === null ||
+        rank === null ||
+        rank < 1 ||
+        !Number.isInteger(rank) ||
+        contribution < 0
+    ) {
+        return null;
+    }
+
+    const unit = METRIC_UNITS[metric.feature];
+    return `Rank ${rank}: ${ANOMALY_METRIC_LABELS[metric.feature]} — observed ${formatMetric(observed, unit, 2)}, reconstructed ${formatMetric(reconstructed, unit, 2)} (error ${formatMetric(absoluteError, unit, 2)}; standardized error ${normalizedError.toFixed(2)}); ${contribution.toFixed(1)}% contribution.`;
+}
+
+function renderAnomalyExplanation(explanation) {
+    const list = $("anomalyExplanation");
+    if (!list) return;
+
+    while (list.firstChild) {
+        list.removeChild(list.firstChild);
+    }
+
+    const metrics = Array.isArray(explanation?.metrics)
+        ? explanation.metrics
+        : [];
+    const lines = metrics
+        .map(formatAnomalyMetric)
+        .filter((line) => line !== null)
+        .slice(0, 3);
+
+    if (!lines.length) {
+        list.hidden = true;
+        return;
+    }
+
+    lines.forEach((line) => {
+        const item = document.createElement("li");
+        item.textContent = line;
+        list.appendChild(item);
+    });
+
+    list.hidden = false;
+}
+
 async function updateAISectionsFromBackend() {
     try {
         const response = await fetch(
@@ -2376,6 +2444,7 @@ async function updateAISectionsFromBackend() {
         );
 
         if (!response.ok) {
+            renderAnomalyExplanation(null);
             const prediction = $("predictionResult");
             if (prediction) {
                 prediction.textContent =
@@ -2388,6 +2457,7 @@ async function updateAISectionsFromBackend() {
         const result = await response.json();
 
         if (!result?.success) {
+            renderAnomalyExplanation(null);
             const prediction = $("predictionResult");
             if (prediction) {
                 prediction.textContent =
@@ -2399,6 +2469,7 @@ async function updateAISectionsFromBackend() {
 
         const predictionData = result.prediction || {};
         const anomalyData = result.anomaly || {};
+        renderAnomalyExplanation(anomalyData.explanation);
 
         if (
             predictionData.predicted_connectivity_score !== undefined
@@ -2429,6 +2500,7 @@ async function updateAISectionsFromBackend() {
         }
 
     } catch (error) {
+        renderAnomalyExplanation(null);
         const prediction = $("predictionResult");
         if (prediction) {
             prediction.textContent =
@@ -2798,6 +2870,7 @@ if (typeof module !== "undefined" && module.exports) {
         updateDashboard,
         updateNetworkStatus,
         handleConnectivityTransition,
+        formatAnomalyMetric,
         loadNetworkHistory,
         smartConnectivity,
         resolveNetworkType,

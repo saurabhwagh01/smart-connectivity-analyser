@@ -40,6 +40,8 @@ AI_BACKEND_DIR = Path(__file__).resolve().parent
 if str(AI_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(AI_BACKEND_DIR))
 
+from anomaly_explanation import build_anomaly_explanation
+
 try:
     import torch
     from ai_engine import (
@@ -1422,7 +1424,22 @@ def ai_anomaly():
                 (reconstructed - target) ** 2
             ).item()
 
+        if not math.isfinite(reconstruction_error):
+            raise ValueError(
+                "The model returned a non-finite reconstruction error."
+            )
+
+        explanation = build_anomaly_explanation(
+            FEATURES,
+            latest["values"],
+            target.reshape(-1).tolist(),
+            reconstructed.reshape(-1).tolist(),
+            ai_scaler,
+        )
+
         threshold = float(ai_anomaly_threshold or 0.05)
+        if not math.isfinite(threshold):
+            raise ValueError("The anomaly threshold is not finite.")
         is_anomaly = reconstruction_error > threshold
 
         return {
@@ -1440,6 +1457,7 @@ def ai_anomaly():
                 if is_anomaly
                 else "No anomaly detected"
             ),
+            "explanation": explanation,
         }
 
     except Exception as error:

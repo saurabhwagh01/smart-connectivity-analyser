@@ -198,23 +198,39 @@ def calculate_scaler(data):
     }
 
 
-def normalize_values(values, scaler):
+def _scaler_mean_and_scale(scaler, feature_index):
+    mean = float(scaler["mean"][feature_index])
+    std = float(scaler["std"][feature_index])
 
-    return [
-        (
-            value - scaler["mean"][index]
+    if not math.isfinite(mean) or not math.isfinite(std) or std < 0:
+        raise ValueError(
+            "Scaler means and standard deviations must be valid finite values."
         )
-        / scaler["std"][index]
-        for index, value in enumerate(values)
-    ]
+
+    return mean, std if abs(std) >= 1e-8 else 1.0
+
+
+def normalize_values(values, scaler):
+    normalized = []
+
+    for index, value in enumerate(values):
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError("Values to normalize must be finite.")
+
+        mean, scale = _scaler_mean_and_scale(scaler, index)
+        normalized_value = (value - mean) / scale
+        if not math.isfinite(normalized_value):
+            raise ValueError("Normalized values must be finite.")
+
+        normalized.append(normalized_value)
+
+    return normalized
 
 
 def denormalize_value(value, scaler, feature_index):
-
-    return (
-        value * scaler["std"][feature_index]
-        + scaler["mean"][feature_index]
-    )
+    mean, scale = _scaler_mean_and_scale(scaler, feature_index)
+    return float(value) * scale + mean
 
 
 # ============================================================

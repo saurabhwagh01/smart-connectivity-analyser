@@ -15,9 +15,37 @@ const {
     formatNumber,
     formatMetric,
     formatNetworkMetric,
+    formatAnomalyMetric,
     isValidMetricNumber,
     METRIC_UNITS
 } = require('../js/script.js');
+
+describe('Anomaly diagnostic formatting', () => {
+    it('formats ranked metric values and contribution clearly', () => {
+        const line = formatAnomalyMetric({
+            feature: 'ping_ms',
+            observed_value: 180,
+            reconstructed_value: 24,
+            absolute_error: 156,
+            normalized_error: 2.4,
+            contribution_percent: 58,
+            rank: 1
+        });
+
+        assert.match(line, /Rank 1: Ping/);
+        assert.match(line, /observed 180\.00 ms/);
+        assert.match(line, /error 156\.00 ms/);
+        assert.match(line, /58\.0% contribution/);
+    });
+
+    it('omits unsupported metrics and incomplete diagnostics', () => {
+        assert.equal(formatAnomalyMetric({ feature: 'connectivity_score' }), null);
+        assert.equal(formatAnomalyMetric({
+            feature: 'ping_ms',
+            observed_value: null
+        }), null);
+    });
+});
 
 describe('Network Metric Formatting Test Suite', () => {
 
