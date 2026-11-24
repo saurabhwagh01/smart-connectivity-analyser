@@ -355,6 +355,13 @@
       <a href="#location" class="px-3 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:bg-white/60">Location</a>
     </nav>
 
+    <div id="interfaceSelectorWrapper" class="hidden flex items-center gap-1.5 bg-white/70 px-3 py-1.5 rounded-lg border border-slate-200/80 text-xs text-slate-700">
+      <label for="networkInterfaceSelect" class="font-medium whitespace-nowrap text-slate-600"><i class="fa-solid fa-network-wired mr-1" aria-hidden="true"></i>Interface:</label>
+      <select id="networkInterfaceSelect" aria-label="Select Network Interface" class="bg-transparent text-slate-800 text-xs font-medium focus:outline-none cursor-pointer">
+        <option value="auto">Automatic (Default)</option>
+      </select>
+    </div>
+
     <button id="startTest" type="button" class="control-btn accent-gradient !text-white !border-transparent px-5 py-3" aria-describedby="testMessage">
       <i class="fa-solid fa-bolt" aria-hidden="true"></i>
       <span id="startTestLabel">Start Test</span>

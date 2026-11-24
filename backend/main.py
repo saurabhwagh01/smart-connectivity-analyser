@@ -23,6 +23,8 @@ import sqlite3
 import json
 import math
 import sys
+import socket
+import logging
 
 import platform
 import subprocess
@@ -31,6 +33,8 @@ import re
 
 import statistics
 from datetime import date, datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # AI MODEL IMPORTS
@@ -616,7 +620,7 @@ def parse_ping_output(output):
     return ping_times, packet_loss
 
 
-def build_ping_command(target, packet_count, timeout_seconds, system):
+def build_ping_command(target, packet_count, timeout_seconds, system, interface=None):
     """Return the ping command for the given operating system.
 
     system is a platform.system() value: "Windows", "Linux" or
@@ -634,21 +638,123 @@ def build_ping_command(target, packet_count, timeout_seconds, system):
 
     if system == "Darwin":
         # -c: number of pings, -W: reply timeout in milliseconds.
-        return [
+        cmd = [
             "ping",
             "-c", str(packet_count),
             "-W", str(timeout_seconds * 1000),
-            target,
         ]
+        if interface and interface != "auto":
+            cmd.extend(["-I", str(interface)])
+        cmd.append(target)
+        return cmd
 
     # Linux and other Unix-like systems.
     # -c: number of pings, -W: reply timeout in seconds.
-    return [
+    cmd = [
         "ping",
         "-c", str(packet_count),
         "-W", str(timeout_seconds),
-        target,
     ]
+    if interface and interface != "auto":
+        cmd.extend(["-I", str(interface)])
+    cmd.append(target)
+    return cmd
+
+
+# ============================================================
+# NETWORK INTERFACE DISCOVERY AND VALIDATION
+# ============================================================
+
+
+def discover_network_interfaces():
+    """Discover available network interfaces across operating systems.
+
+    Avoids exposing private identifiers (such as MAC addresses) and returns
+    only interface names/labels and connection status.
+    """
+    system = platform.system()
+    interfaces = [{"id": "auto", "name": "Automatic (Default)", "status": "active", "is_default": True}]
+
+    try:
+        if system == "Windows":
+            res = subprocess.run(
+                ["netsh", "interface", "show", "interface"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode == 0:
+                lines = res.stdout.strip().splitlines()
+                for line in lines[3:]:
+                    parts = re.split(r'\s{2,}', line.strip())
+                    if len(parts) >= 4:
+                        name = parts[3].strip()
+                        state = parts[1].strip().lower()
+                        status = "connected" if state == "connected" else "disconnected"
+                        interfaces.append({
+                            "id": name,
+                            "name": name,
+                            "status": status,
+                            "is_default": False,
+                        })
+                return {"supported": True, "interfaces": interfaces, "selected": "auto"}
+        elif hasattr(socket, "if_nameindex"):
+            if_list = socket.if_nameindex()
+            for _idx, name in if_list:
+                if name.startswith("lo"):
+                    continue
+                interfaces.append({
+                    "id": name,
+                    "name": name,
+                    "status": "connected",
+                    "is_default": False,
+                })
+            return {"supported": True, "interfaces": interfaces, "selected": "auto"}
+    except Exception as e:
+        logger.warning(f"Network interface discovery failed: {e}")
+
+    return {"supported": False, "interfaces": interfaces, "selected": "auto"}
+
+
+def validate_network_interface(interface_name: str | None = None) -> str:
+    """Validate requested network interface and ensure it is available.
+
+    Returns 'auto' for default or empty interface requests.
+    Raises HTTPException(400) for disconnected, missing, or invalid interfaces.
+    """
+    if not interface_name or str(interface_name).strip().lower() in ("", "auto", "default"):
+        return "auto"
+
+    cleaned = str(interface_name).strip()
+    discovery = discover_network_interfaces()
+
+    if not discovery.get("supported"):
+        # Unsupported platform falls back safely to auto
+        logger.info(f"Interface discovery unsupported on platform, falling back to auto for '{cleaned}'")
+        return "auto"
+
+    available = discovery.get("interfaces", [])
+    matching = next((item for item in available if item["id"].lower() == cleaned.lower()), None)
+
+    if not matching:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Network interface '{cleaned}' is invalid or does not exist.",
+        )
+
+    if matching.get("status") == "disconnected":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Network interface '{cleaned}' is currently disconnected.",
+        )
+
+    return matching["id"]
+
+
+@app.get("/api/network-interfaces")
+def get_network_interfaces():
+    """List available network interfaces when discovery is supported."""
+    return discover_network_interfaces()
 
 
 # ============================================================
@@ -661,9 +767,9 @@ def build_ping_command(target, packet_count, timeout_seconds, system):
 
 @app.get("/api/network-quality")
 
-def network_quality():
+def network_quality(interface: str | None = Query(None, description="Optional network interface to bind diagnostics")):
 
-
+    selected_interface = validate_network_interface(interface)
 
     target = "1.1.1.1"
 
@@ -680,6 +786,7 @@ def network_quality():
         packet_count,
         timeout_seconds,
         platform.system(),
+        interface=selected_interface,
     )
 
 
@@ -795,7 +902,9 @@ def network_quality():
 
             "jitter_ms": None,
 
-            "status": "unreachable"
+            "status": "unreachable",
+
+            "interface": selected_interface
 
         }
 
@@ -1023,7 +1132,9 @@ def network_quality():
 
 
 
-        "status": status
+        "status": status,
+
+        "interface": selected_interface
 
     }
 
