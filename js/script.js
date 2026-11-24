@@ -17,6 +17,7 @@ let speedTestTimeout = null;
 let networkChart = null;
 let connectivityMap = null;
 let userMarker = null;
+let locationAccuracyCircle = null;
 let savedMarkers = [];
 let sessionTimer = null;
 let sessionStartTime = Date.now();
@@ -757,12 +758,91 @@ function ensureMapReady() {
 }
 
 /* =========================================================
+   LOCATION HELPERS & ACCURACY
+   ========================================================= */
+
+function validateCoordinates(latitude, longitude) {
+    const lat = safeNumber(latitude);
+    const lng = safeNumber(longitude);
+
+    if (lat === null || !Number.isFinite(lat) || lat < -90 || lat > 90) {
+        return {
+            valid: false,
+            latitude: null,
+            longitude: null,
+            error: "Latitude must be a valid number between -90 and 90."
+        };
+    }
+
+    if (lng === null || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return {
+            valid: false,
+            latitude: null,
+            longitude: null,
+            error: "Longitude must be a valid number between -180 and 180."
+        };
+    }
+
+    return {
+        valid: true,
+        latitude: lat,
+        longitude: lng
+    };
+}
+
+function resolveLocationZoom(accuracy) {
+    const acc = safeNumber(accuracy);
+    if (acc === null || acc <= 0) return 16;
+    if (acc <= 100) return 17;
+    if (acc <= 500) return 15;
+    if (acc <= 1500) return 14;
+    if (acc <= 5000) return 12;
+    return 10;
+}
+
+function formatLocationAccuracy(accuracy) {
+    const acc = safeNumber(accuracy);
+    if (acc === null || acc < 0) return "±unknown";
+    if (acc >= 1000) {
+        return `±${(acc / 1000).toFixed(1)} km`;
+    }
+    return `±${Math.round(acc)} m`;
+}
+
+function resolveGeolocationErrorMessage(error) {
+    if (!error) return "Unable to detect location. Please try again.";
+    const code = typeof error === "object" ? error.code : error;
+    if (code === 1) {
+        return "Location permission denied. Please allow location access in your browser and try again.";
+    }
+    if (code === 2) {
+        return "Location information is unavailable. Ensure your device GPS/network location is enabled.";
+    }
+    if (code === 3) {
+        return "Location request timed out. Please check your network and click 'Retry Location'.";
+    }
+    return (error && error.message) || "Unable to detect location. Please try again.";
+}
+
+/* =========================================================
    LOCATION
    ========================================================= */
 
 function detectLocation() {
+    const detectBtn = $("detectLocation");
+    const detectBtnText = $("detectLocationText");
+
+    const setButtonState = (text, disabled) => {
+        if (detectBtnText) {
+            detectBtnText.textContent = text;
+        }
+        if (detectBtn) {
+            detectBtn.disabled = Boolean(disabled);
+        }
+    };
+
     if (!navigator.geolocation) {
-        showToast("Geolocation is not supported.");
+        showToast("Geolocation is not supported by your browser.");
 
         setText(
             "locationResult",
@@ -772,6 +852,8 @@ function detectLocation() {
         return;
     }
 
+    setButtonState("Detecting Location...", true);
+
     setText(
         "locationResult",
         "Detecting your current location..."
@@ -779,23 +861,42 @@ function detectLocation() {
 
     navigator.geolocation.getCurrentPosition(
         (position) => {
-            const latitude = position.coords.latitude;
-            const longitude = position.coords.longitude;
+            setButtonState("Refresh Location", false);
+
+            if (!position || !position.coords) {
+                setText("locationResult", "Unable to retrieve valid location coordinates.");
+                showToast("Invalid location data received.");
+                return;
+            }
+
+            const rawLat = position.coords.latitude;
+            const rawLng = position.coords.longitude;
             const accuracy = position.coords.accuracy;
+
+            const coordValidation = validateCoordinates(rawLat, rawLng);
+            if (!coordValidation.valid) {
+                setText("locationResult", coordValidation.error || "Invalid coordinates received.");
+                showToast("Invalid GPS coordinates.");
+                return;
+            }
+
+            const latitude = coordValidation.latitude;
+            const longitude = coordValidation.longitude;
 
             currentLocation = {
                 latitude,
                 longitude,
                 accuracy,
-                timestamp: position.timestamp
+                timestamp: position.timestamp || Date.now()
             };
 
             ensureMapReady();
 
             if (connectivityMap && typeof L !== "undefined") {
                 const point = [latitude, longitude];
+                const zoom = resolveLocationZoom(accuracy);
 
-                connectivityMap.setView(point, 16);
+                connectivityMap.setView(point, zoom);
 
                 if (userMarker) {
                     userMarker.setLatLng(point);
@@ -803,30 +904,44 @@ function detectLocation() {
                     userMarker = L.marker(point).addTo(connectivityMap);
                 }
 
+                const accuracyLabel = formatLocationAccuracy(accuracy);
                 userMarker
-                    .bindPopup("Your Current Location")
+                    .bindPopup(`<b>Your Current Location</b><br>Accuracy: ${accuracyLabel}`)
                     .openPopup();
+
+                if (typeof accuracy === "number" && accuracy > 0) {
+                    if (locationAccuracyCircle) {
+                        locationAccuracyCircle.setLatLng(point).setRadius(accuracy);
+                    } else {
+                        locationAccuracyCircle = L.circle(point, {
+                            radius: accuracy,
+                            color: "#2563eb",
+                            fillColor: "#3b82f6",
+                            fillOpacity: 0.15,
+                            weight: 1.5
+                        }).addTo(connectivityMap);
+                    }
+                } else if (locationAccuracyCircle) {
+                    connectivityMap.removeLayer(locationAccuracyCircle);
+                    locationAccuracyCircle = null;
+                }
             }
 
-            setText(
-                "locationResult",
-                `Location detected: ${latitude.toFixed(5)}, ${longitude.toFixed(5)} (±${Math.round(accuracy)} m)`
-            );
+            const accuracyText = formatLocationAccuracy(accuracy);
+            let resultMessage = `Location detected: ${latitude.toFixed(5)}, ${longitude.toFixed(5)} (${accuracyText})`;
 
+            if (typeof accuracy === "number" && accuracy > 2000) {
+                resultMessage += " — Notice: low accuracy fix; refresh to obtain more precise GPS position.";
+            }
+
+            setText("locationResult", resultMessage);
             showToast("Location detected successfully.");
         },
 
         (error) => {
-            let message = "Unable to detect location.";
+            setButtonState("Retry Location", false);
 
-            if (error.code === 1) {
-                message =
-                    "Location permission denied. Allow location access in your browser.";
-            } else if (error.code === 2) {
-                message = "Location information is unavailable.";
-            } else if (error.code === 3) {
-                message = "Location request timed out. Try again.";
-            }
+            const message = resolveGeolocationErrorMessage(error);
 
             setText("locationResult", message);
             showToast(message);
@@ -844,18 +959,17 @@ function saveLocation() {
     let latitude;
     let longitude;
 
-    if (currentLocation) {
-        latitude = currentLocation.latitude;
-        longitude = currentLocation.longitude;
-    } else if (connectivityMap) {
-        const center = connectivityMap.getCenter();
-
-        latitude = center.lat;
-        longitude = center.lng;
-    } else {
-        showToast("Detect your location first.");
+    if (!currentLocation || !Number.isFinite(currentLocation.latitude) || !Number.isFinite(currentLocation.longitude)) {
+        showToast("Detect your current location first before saving.");
+        setText(
+            "locationResult",
+            "No accurate location detected. Click 'Detect Location' first to obtain your current position."
+        );
         return;
     }
+
+    latitude = currentLocation.latitude;
+    longitude = currentLocation.longitude;
 
     const point = {
         latitude,
@@ -2848,6 +2962,18 @@ if (typeof window !== "undefined") {
 
     window.detectNetworkType =
         detectNetworkType;
+
+    window.validateCoordinates =
+        validateCoordinates;
+
+    window.resolveLocationZoom =
+        resolveLocationZoom;
+
+    window.formatLocationAccuracy =
+        formatLocationAccuracy;
+
+    window.resolveGeolocationErrorMessage =
+        resolveGeolocationErrorMessage;
 }
 
 /* ─── Node.js Exports for Tests ─────────────────────── */
@@ -2874,7 +3000,11 @@ if (typeof module !== "undefined" && module.exports) {
         loadNetworkHistory,
         smartConnectivity,
         resolveNetworkType,
-        detectNetworkType
+        detectNetworkType,
+        validateCoordinates,
+        resolveLocationZoom,
+        formatLocationAccuracy,
+        resolveGeolocationErrorMessage
     };
 }
 /* =========================================================
