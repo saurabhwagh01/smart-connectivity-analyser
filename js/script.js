@@ -237,6 +237,8 @@ async function initializeApplication() {
     updateAISectionsFromBackend();
     updateNetworkRecommendation();
 
+    await initNetworkInterfaceSelection();
+
     startSessionTimer();
 
     console.log("Smart Connectivity Analyser initialized.");
@@ -1914,13 +1916,67 @@ async function startNetworkTest() {
 }
 
 /* =========================================================
-   BACKEND NETWORK QUALITY
+   BACKEND NETWORK QUALITY AND INTERFACE SELECTION
    ========================================================= */
+
+async function initNetworkInterfaceSelection() {
+    if (typeof document === "undefined") return;
+
+    const wrapper = document.getElementById("interfaceSelectorWrapper");
+    const select = document.getElementById("networkInterfaceSelect");
+    if (!wrapper || !select) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/network-interfaces`, {
+            method: "GET",
+            cache: "no-store",
+        });
+
+        if (!response.ok) {
+            wrapper.classList.add("hidden");
+            return;
+        }
+
+        const data = await response.json();
+        if (!data.supported || !Array.isArray(data.interfaces) || data.interfaces.length <= 1) {
+            wrapper.classList.add("hidden");
+            return;
+        }
+
+        select.innerHTML = "";
+        data.interfaces.forEach((iface) => {
+            const opt = document.createElement("option");
+            opt.value = iface.id;
+            opt.textContent = iface.status === "disconnected"
+                ? `${iface.name} (Disconnected)`
+                : iface.name;
+            if (iface.status === "disconnected") {
+                opt.disabled = true;
+            }
+            if (iface.is_default) {
+                opt.selected = true;
+            }
+            select.appendChild(opt);
+        });
+
+        wrapper.classList.remove("hidden");
+    } catch {
+        wrapper.classList.add("hidden");
+    }
+}
 
 async function runBackendNetworkQualityTest() {
     try {
+        let url = `${API_BASE}/network-quality`;
+        if (typeof document !== "undefined") {
+            const select = document.getElementById("networkInterfaceSelect");
+            if (select && select.value && select.value !== "auto") {
+                url += `?interface=${encodeURIComponent(select.value)}`;
+            }
+        }
+
         const response = await fetch(
-            `${API_BASE}/network-quality`,
+            url,
             {
                 method: "GET",
                 cache: "no-store"
@@ -1928,9 +1984,9 @@ async function runBackendNetworkQualityTest() {
         );
 
         if (!response.ok) {
-            throw new Error(
-                `Network quality API returned ${response.status}`
-            );
+            const errData = await response.json().catch(() => ({}));
+            const msg = errData.detail || `Network quality API returned ${response.status}`;
+            throw new Error(msg);
         }
 
         const data = await response.json();
