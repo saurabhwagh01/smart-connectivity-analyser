@@ -55,7 +55,7 @@ const _metrics =
             formatNetworkMetric: globalThis.formatNetworkMetric
         };
 
-const {
+var {
     METRIC_UNITS,
     isValidMetric,
     safeNumber,
@@ -248,7 +248,7 @@ const _networkStatus =
             resolveDashboardDisplayState: globalThis.resolveDashboardDisplayState
         };
 
-const {
+var {
     getBrowserConnection,
     resolveNetworkType,
     isDeviceOffline,
