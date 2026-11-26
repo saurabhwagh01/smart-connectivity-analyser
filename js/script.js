@@ -40,19 +40,31 @@ let currentMetrics = {
     score: 0
 };
 
-// ─── Metric Units ─────────────────────────────────────
-const METRIC_UNITS = Object.freeze({
-    download: "Mbps",
-    download_mbps: "Mbps",
-    upload: "Mbps",
-    upload_mbps: "Mbps",
-    ping: "ms",
-    ping_ms: "ms",
-    jitter: "ms",
-    jitter_ms: "ms",
-    packetLoss: "%",
-    packet_loss: "%"
-});
+// ─── Metric Units (loaded from js/metrics.js) ──────────
+const _metrics =
+    typeof require === "function"
+        ? require("./metrics.js")
+        : {
+            METRIC_UNITS: globalThis.METRIC_UNITS,
+            isValidMetric: globalThis.isValidMetric,
+            safeNumber: globalThis.safeNumber,
+            firstValid: globalThis.firstValid,
+            isValidMetricNumber: globalThis.isValidMetricNumber,
+            formatNumber: globalThis.formatNumber,
+            formatMetric: globalThis.formatMetric,
+            formatNetworkMetric: globalThis.formatNetworkMetric
+        };
+
+const {
+    METRIC_UNITS,
+    isValidMetric,
+    safeNumber,
+    firstValid,
+    isValidMetricNumber,
+    formatNumber,
+    formatMetric,
+    formatNetworkMetric
+} = _metrics;
 
 const ANOMALY_METRIC_LABELS = Object.freeze({
     download_mbps: "Download speed",
@@ -61,29 +73,6 @@ const ANOMALY_METRIC_LABELS = Object.freeze({
     jitter_ms: "Jitter",
     packet_loss: "Packet loss"
 });
-
-/* =========================================================
-   HELPERS
-   ========================================================= */
-
-function isValidMetric(value) {
-    return value !== null &&
-        value !== undefined &&
-        value !== "" &&
-        typeof value !== "boolean" &&
-        Number.isFinite(Number(value));
-}
-
-function safeNumber(value, fallback = null) {
-    return isValidMetric(value) ? Number(value) : fallback;
-}
-
-function firstValid(...values) {
-    for (const value of values) {
-        if (isValidMetric(value)) return Number(value);
-    }
-    return null;
-}
 
 function setText(id, value) {
     const element = $(id);
@@ -109,67 +98,11 @@ function showToast(message) {
 
 // ─── Format Metric ─────────────────────────────────────
 
-function formatMetric(value, unitOrDecimals = "", decimals = 1) {
-    if (!isValidMetricNumber(value)) {
-        return "Unavailable";
-    }
-
-    // Maintain compatibility with existing formatMetric(value, 2) calls.
-    let unit = "";
-
-    if (typeof unitOrDecimals === "number") {
-        decimals = unitOrDecimals;
-    } else {
-        unit = unitOrDecimals || "";
-    }
-
-    const formatted = Number(value).toFixed(decimals);
-
-    return unit ? `${formatted} ${unit}` : formatted;
-}
-
-// ─── Metric Validation & Formatting Helpers ────────────
-
-/*
-   The shared, unit-tested scoring function from
-   js/connectivity-score.js. index.html loads that module before
-   this file, so the browser uses the global it defines; the Node
-   tests require it directly here.
-*/
-
+// ─── Shared Connectivity Score (loaded from js/connectivity-score.js) ──
 const sharedCalculateConnectivityScore =
     typeof calculateConnectivityScore !== "undefined"
         ? calculateConnectivityScore
         : require("./connectivity-score.js").calculateConnectivityScore;
-
-function isValidMetricNumber(value) {
-    if (
-        value === null ||
-        value === undefined ||
-        value === "" ||
-        typeof value === "boolean" ||
-        typeof value === "object" ||
-        (typeof value === "string" && value.trim() === "")
-    ) {
-        return false;
-    }
-
-    return Number.isFinite(Number(value));
-}
-
-
-function formatNumber(value, decimals = 1) {
-    if (!isValidMetricNumber(value)) {
-        return "--";
-    }
-
-    return Number(value).toFixed(decimals);
-}
-function formatNetworkMetric(metricType, value, decimals = 1) {
-    const unit = METRIC_UNITS[metricType] || "";
-
-    return formatMetric(value, unit, decimals);
-}
 /**
  * Mark the Start Test button as busy without using the `disabled`
  * attribute. A disabled button loses keyboard focus, which drops a
@@ -302,25 +235,25 @@ const STATUS_INDICATOR_CLASSES = Object.freeze([
     "poor"
 ]);
 
-function getBrowserConnection() {
-    if (typeof navigator === "undefined") return null;
+// ─── Network Status & Type Detection (loaded from js/network-status.js) ──
+const _networkStatus =
+    typeof require === "function"
+        ? require("./network-status.js")
+        : {
+            getBrowserConnection: globalThis.getBrowserConnection,
+            resolveNetworkType: globalThis.resolveNetworkType,
+            isDeviceOffline: globalThis.isDeviceOffline,
+            resolveConnectivityIndicator: globalThis.resolveConnectivityIndicator,
+            resolveDashboardDisplayState: globalThis.resolveDashboardDisplayState
+        };
 
-    return (
-        navigator.connection ||
-        navigator.mozConnection ||
-        navigator.webkitConnection ||
-        null
-    );
-}
-
-function isDeviceOffline(
-    connection = getBrowserConnection(),
-    isOnline = typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
-        ? navigator.onLine
-        : true
-) {
-    return resolveNetworkType(connection, isOnline).type === "Offline";
-}
+const {
+    getBrowserConnection,
+    resolveNetworkType,
+    isDeviceOffline,
+    resolveConnectivityIndicator,
+    resolveDashboardDisplayState
+} = _networkStatus;
 
 function clearLiveMetrics() {
     currentMetrics.download = null;
@@ -331,98 +264,6 @@ function clearLiveMetrics() {
     currentMetrics.score = 0;
     metricsRestoredFromHistory = false;
     offlineClearedMetrics = true;
-}
-
-function resolveConnectivityIndicator(
-    score,
-    { isOffline = false, isTesting = false } = {}
-) {
-    if (isOffline) {
-        return {
-            status: "Offline",
-            dotClass: "disconnected",
-            score: 0
-        };
-    }
-
-    const numericScore = Number.isFinite(Number(score))
-        ? Math.max(0, Number(score))
-        : 0;
-
-    if (isTesting) {
-        return {
-            status: "Testing",
-            dotClass: "testing",
-            score: numericScore
-        };
-    }
-
-    if (numericScore >= 80) {
-        return { status: "Excellent", dotClass: "excellent", score: numericScore };
-    }
-
-    if (numericScore >= 60) {
-        return { status: "Good", dotClass: "good", score: numericScore };
-    }
-
-    if (numericScore >= 40) {
-        return { status: "Fair", dotClass: "fair", score: numericScore };
-    }
-
-    if (numericScore > 0) {
-        return { status: "Poor", dotClass: "poor", score: numericScore };
-    }
-
-    return {
-        status: "Online",
-        dotClass: "connected",
-        score: 0
-    };
-}
-
-function resolveDashboardDisplayState(
-    metrics = {},
-    {
-        isOffline = false,
-        isTesting = false,
-        isHistoryRestored = false
-    } = {}
-) {
-    if (isOffline) {
-        return {
-            download: "Unavailable",
-            upload: "Unavailable",
-            ping: "Unavailable",
-            jitter: "Unavailable",
-            packetLoss: "Unavailable",
-            score: 0,
-            metricsSubtitle: "Offline — live measurements unavailable",
-            indicator: resolveConnectivityIndicator(0, {
-                isOffline: true,
-                isTesting
-            })
-        };
-    }
-
-    const score = Number.isFinite(Number(metrics.score))
-        ? Math.max(0, Number(metrics.score))
-        : sharedCalculateConnectivityScore(metrics);
-
-    return {
-        download: formatMetric(metrics.download),
-        upload: formatMetric(metrics.upload),
-        ping: formatMetric(metrics.ping),
-        jitter: formatMetric(metrics.jitter),
-        packetLoss: formatMetric(metrics.packetLoss),
-        score,
-        metricsSubtitle: isHistoryRestored
-            ? "Last recorded measurements (run a test for live metrics)"
-            : "Live performance measurements",
-        indicator: resolveConnectivityIndicator(score, {
-            isOffline: false,
-            isTesting
-        })
-    };
 }
 
 function applyConnectivityStatusIndicator(score = currentMetrics.score) {
@@ -547,104 +388,7 @@ function updateNetworkStatus() {
  * @param {boolean} [isOnline=true] - Browser online status
  * @returns {{type: string, detail: string, isKnown: boolean, effectiveType: string|null}}
  */
-function resolveNetworkType(connection, isOnline = true) {
-    if (!isOnline) {
-        return {
-            type: "Offline",
-            detail: "No internet connection",
-            isKnown: true,
-            effectiveType: null
-        };
-    }
-
-    if (!connection || typeof connection !== "object") {
-        return {
-            type: "Unknown",
-            detail: "Network Information API not supported by browser",
-            isKnown: false,
-            effectiveType: null
-        };
-    }
-
-    const rawType = typeof connection.type === "string"
-        ? connection.type.toLowerCase().trim()
-        : "";
-
-    const rawEffectiveType = typeof connection.effectiveType === "string"
-        ? connection.effectiveType.toLowerCase().trim()
-        : null;
-
-    if (rawType === "none") {
-        return {
-            type: "Offline",
-            detail: "No active network connection",
-            isKnown: true,
-            effectiveType: null
-        };
-    }
-
-    if (rawType === "wifi" || rawType === "wlan") {
-        return {
-            type: "Wi-Fi",
-            detail: "Wi-Fi connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "cellular" || rawType === "mobile" || rawType.startsWith("cellular")) {
-        const speedContext = rawEffectiveType
-            ? `Cellular (~${rawEffectiveType.toUpperCase()} speed tier, generation unverified)`
-            : "Cellular connection (generation unverified)";
-
-        return {
-            type: "Mobile",
-            detail: speedContext,
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "ethernet") {
-        return {
-            type: "Ethernet",
-            detail: "Wired ethernet connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "bluetooth") {
-        return {
-            type: "Bluetooth",
-            detail: "Bluetooth tethering connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "wimax") {
-        return {
-            type: "WiMAX",
-            detail: "WiMAX wireless connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    // When connection.type is missing, "other", "unknown", or unrecognized:
-    // Do NOT treat effectiveType (e.g. "3g" or "4g") as confirmed network type.
-    const speedTierNote = rawEffectiveType
-        ? `Estimated ~${rawEffectiveType.toUpperCase()} speed tier (medium unverified)`
-        : "Network type not reported by browser";
-
-    return {
-        type: "Unknown",
-        detail: speedTierNote,
-        isKnown: false,
-        effectiveType: rawEffectiveType
-    };
-}
+// resolveNetworkType is loaded from js/network-status.js
 
 function detectNetworkType() {
     const isOnline =
