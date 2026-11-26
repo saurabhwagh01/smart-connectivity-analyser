@@ -121,6 +121,7 @@ def build_profile_result(profile, ping_result, measured_at=None):
         "profile": profile.id,
         "measured_at": measured_at or datetime.now(timezone.utc).isoformat(),
         "target": ping_result.get("target"),
+        "method": ping_result.get("method"),
         "packets_sent": ping_result.get("packets_sent"),
         "packets_received": received,
     }

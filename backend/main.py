@@ -33,7 +33,9 @@ import math
 import sys
 
 import platform
+import socket
 import subprocess
+import time
 
 import re
 
@@ -713,8 +715,54 @@ def build_ping_command(target, packet_count, timeout_seconds, system):
     ]
 
 
+TCP_PROBE_PORT = 443
+
+
+def measure_tcp_probes(target, packet_count, timeout_seconds, port=TCP_PROBE_PORT):
+    """Time TCP connection attempts; return the successful times in ms.
+
+    Used when the ping command cannot run (for example on hosted servers
+    without a ping binary or ICMP permission). A TCP handshake needs no
+    special privileges and takes about one network round trip. Each
+    failed or timed-out attempt counts as a lost probe.
+    """
+    probe_times = []
+    for _ in range(packet_count):
+        start = time.perf_counter()
+        try:
+            with socket.create_connection((target, port), timeout=timeout_seconds):
+                pass
+        except OSError:
+            continue
+        probe_times.append(round((time.perf_counter() - start) * 1000, 2))
+    return probe_times
+
+
+def measure_with_tcp_fallback(target, packet_count, timeout_seconds, ping_error):
+    """Measure with TCP probes after ping failed with ping_error."""
+    probe_times = measure_tcp_probes(target, packet_count, timeout_seconds)
+
+    # Every probe failing could be an outage or blocked outbound traffic,
+    # so report that nothing could be measured instead of a 100% loss.
+    if not probe_times:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"{ping_error} The TCP fallback probes to "
+                f"{target}:{TCP_PROBE_PORT} also failed, so packet loss "
+                "could not be measured."
+            ),
+        )
+
+    packet_loss = ((packet_count - len(probe_times)) / packet_count) * 100
+    return summarize_ping(target, packet_count, probe_times, packet_loss, "tcp")
+
+
 def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
-    """Run the ping measurement. Raises HTTPException if ping cannot run."""
+    """Run the ping measurement, falling back to TCP probes.
+
+    Raises HTTPException if neither method can measure anything.
+    """
     target = "1.1.1.1"
     timeout_seconds = 2
 
@@ -734,9 +782,11 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
         )
         output = process.stdout
     except FileNotFoundError:
-        raise HTTPException(
-            status_code=503,
-            detail="The ping command is not available on this server.",
+        return measure_with_tcp_fallback(
+            target,
+            packet_count,
+            timeout_seconds,
+            "The ping command is not available on this server.",
         )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Ping measurement timed out.")
@@ -751,13 +801,24 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
     # not the same as a real 100% packet loss.
     if not ping_times and packet_loss is None:
         reason = process.stderr.strip() or "ping produced no output"
-        raise HTTPException(
-            status_code=503, detail=f"Ping measurement failed: {reason}"
+        return measure_with_tcp_fallback(
+            target,
+            packet_count,
+            timeout_seconds,
+            f"Ping measurement failed: {reason}.",
         )
 
     if packet_loss is None:
         packet_loss = ((packet_count - len(ping_times)) / packet_count) * 100
 
+    return summarize_ping(target, packet_count, ping_times, packet_loss, "icmp")
+
+
+def summarize_ping(target, packet_count, ping_times, packet_loss, method):
+    """Build the network-quality response from round-trip times.
+
+    method is "icmp" (system ping) or "tcp" (TCP connection probes).
+    """
     if len(ping_times) == 0:
         return {
             "target": target,
@@ -769,6 +830,7 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
             "max_ping_ms": None,
             "jitter_ms": None,
             "status": "unreachable",
+            "method": method,
         }
 
     average_ping = statistics.mean(ping_times)
@@ -802,6 +864,7 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
         "jitter_ms": round(jitter, 2),
         "samples": ping_times,
         "status": status,
+        "method": method,
     }
 
 

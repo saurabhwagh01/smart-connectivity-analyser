@@ -257,7 +257,12 @@ agree on which measurements run.
 | `stability`: Stability Test | Consistency over a longer run | Ping, jitter, packet loss (40 packets) | ~45 s |
 
 Download and upload speeds are measured in the browser (Cloudflare speed
-test). The other checks are measured by the backend ping command.
+test). The other checks are measured by the backend ping command. If the
+server cannot run `ping` (for example, hosted servers without a ping binary
+or ICMP permission), the backend times TCP connections to `1.1.1.1:443`
+instead and counts failed connections as lost probes. The response's
+`method` field is `icmp` or `tcp` so you can tell which was used. If every
+probe fails, the endpoint returns `503` instead of reporting 100% loss.
 
 **Using a profile:** `GET /api/network-quality?profile=quick`. Without the
 `profile` parameter the endpoint behaves exactly as before, so existing callers

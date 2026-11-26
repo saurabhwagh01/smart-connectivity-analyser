@@ -144,19 +144,129 @@ def test_endpoint_reports_real_total_loss_as_unreachable(client, monkeypatch):
     assert response.json()["packet_loss"] == 100.0
 
 
-def test_endpoint_returns_503_when_ping_is_missing(client, monkeypatch):
+def test_endpoint_reports_icmp_method(client, monkeypatch):
+    fake_ping(monkeypatch, stdout=WINDOWS_OUTPUT)
+
+    response = client.get("/api/network-quality")
+
+    assert response.status_code == 200
+    assert response.json()["method"] == "icmp"
+
+
+# ------------------------------------------------------------
+# TCP fallback when the ping command cannot run (issue #58).
+# Hosted servers such as Render have no ping binary, so packet
+# loss used to be reported as unavailable on the live demo.
+# ------------------------------------------------------------
+
+class FakeConnection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def fake_tcp(monkeypatch, outcomes):
+    """Replace socket.create_connection; outcomes is a list of True/False.
+
+    True is a successful connection, False a failed one. Returns the
+    list of (address, timeout) calls so tests can check the probe target.
+    """
+    remaining = list(outcomes)
+    calls = []
+
+    def fake_create_connection(address, timeout=None):
+        calls.append((address, timeout))
+        if remaining.pop(0):
+            return FakeConnection()
+        raise OSError("connection timed out")
+
+    monkeypatch.setattr(main.socket, "create_connection", fake_create_connection)
+    return calls
+
+
+def test_endpoint_falls_back_to_tcp_when_ping_is_missing(client, monkeypatch):
     fake_ping(monkeypatch, error=FileNotFoundError("ping"))
+    calls = fake_tcp(monkeypatch, [True] * 8 + [False] * 2)
+
+    response = client.get("/api/network-quality")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["method"] == "tcp"
+    assert data["packets_sent"] == 10
+    assert data["packets_received"] == 8
+    assert data["packet_loss"] == 20.0
+    assert data["ping_ms"] is not None
+    assert data["jitter_ms"] is not None
+    assert len(data["samples"]) == 8
+    assert len(calls) == 10
+    assert calls[0][0] == ("1.1.1.1", main.TCP_PROBE_PORT)
+
+
+def test_endpoint_falls_back_to_tcp_when_ping_cannot_run(client, monkeypatch):
+    fake_ping(monkeypatch, stderr="ping: socket: Operation not permitted")
+    fake_tcp(monkeypatch, [True] * 10)
+
+    response = client.get("/api/network-quality")
+
+    assert response.status_code == 200
+    assert response.json()["method"] == "tcp"
+    assert response.json()["packet_loss"] == 0.0
+
+
+def test_endpoint_returns_503_when_ping_is_missing_and_tcp_fails(
+    client, monkeypatch
+):
+    # Every probe failing could mean an outage or blocked outbound
+    # traffic, so no made-up 100% loss is reported.
+    fake_ping(monkeypatch, error=FileNotFoundError("ping"))
+    fake_tcp(monkeypatch, [False] * 10)
 
     response = client.get("/api/network-quality")
 
     assert response.status_code == 503
-    assert "not available" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "not available" in detail
+    assert "TCP" in detail
 
 
-def test_endpoint_returns_503_when_ping_cannot_run(client, monkeypatch):
+def test_endpoint_returns_503_when_ping_cannot_run_and_tcp_fails(
+    client, monkeypatch
+):
     fake_ping(monkeypatch, stderr="ping: socket: Operation not permitted")
+    fake_tcp(monkeypatch, [False] * 10)
 
     response = client.get("/api/network-quality")
 
     assert response.status_code == 503
     assert "Operation not permitted" in response.json()["detail"]
+
+
+def test_tcp_fallback_works_for_diagnostic_profiles(client, monkeypatch):
+    fake_ping(monkeypatch, error=FileNotFoundError("ping"))
+    fake_tcp(monkeypatch, [True, False, True, True])
+
+    response = client.get("/api/network-quality", params={"profile": "quick"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["method"] == "tcp"
+    assert data["packet_loss"] == 25.0
+    assert data["checks"]["packet_loss"] == {"status": "ok"}
+    assert data["result_status"] == "complete"
+
+
+def test_ping_timeout_does_not_fall_back(client, monkeypatch):
+    # A timeout means ping ran but the network is slow; keep the 504.
+    fake_ping(
+        monkeypatch,
+        error=subprocess.TimeoutExpired(cmd="ping", timeout=30),
+    )
+    calls = fake_tcp(monkeypatch, [True] * 10)
+
+    response = client.get("/api/network-quality")
+
+    assert response.status_code == 504
+    assert calls == []
