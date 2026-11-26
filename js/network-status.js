@@ -227,6 +227,14 @@ function resolveDashboardDisplayState(
     };
 }
 
+if (typeof globalThis !== "undefined") {
+    globalThis.getBrowserConnection = getBrowserConnection;
+    globalThis.resolveNetworkType = resolveNetworkType;
+    globalThis.isDeviceOffline = isDeviceOffline;
+    globalThis.resolveConnectivityIndicator = resolveConnectivityIndicator;
+    globalThis.resolveDashboardDisplayState = resolveDashboardDisplayState;
+}
+
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {
         getBrowserConnection,

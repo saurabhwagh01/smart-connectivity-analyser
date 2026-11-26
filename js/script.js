@@ -2747,6 +2747,8 @@ if (typeof module !== "undefined" && module.exports) {
         calculateConnectivityScore: sharedCalculateConnectivityScore,
         getConnectivityStatus,
         resolveConnectivityIndicator,
+        ..._metrics,
+        ..._networkStatus,
         resolveDashboardDisplayState,
         isDeviceOffline,
         clearLiveMetrics,
