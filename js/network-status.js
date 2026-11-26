@@ -6,15 +6,18 @@
  * Works in both browser (globals) and Node.js.
  */
 
-const _metricsMod =
-    typeof formatMetric !== "undefined"
-        ? { formatMetric }
-        : require("./metrics.js");
+(function (root) {
+    "use strict";
 
-const _scoreMod =
-    typeof calculateConnectivityScore !== "undefined"
-        ? { calculateConnectivityScore }
-        : require("./connectivity-score.js");
+    const _metricsMod =
+        typeof root.formatMetric !== "undefined"
+            ? { formatMetric: root.formatMetric }
+            : require("./metrics.js");
+
+    const _scoreMod =
+        typeof root.calculateConnectivityScore !== "undefined"
+            ? { calculateConnectivityScore: root.calculateConnectivityScore }
+            : require("./connectivity-score.js");
 
 function getBrowserConnection() {
     if (typeof navigator === "undefined") return null;
@@ -227,20 +230,21 @@ function resolveDashboardDisplayState(
     };
 }
 
-if (typeof globalThis !== "undefined") {
-    globalThis.getBrowserConnection = getBrowserConnection;
-    globalThis.resolveNetworkType = resolveNetworkType;
-    globalThis.isDeviceOffline = isDeviceOffline;
-    globalThis.resolveConnectivityIndicator = resolveConnectivityIndicator;
-    globalThis.resolveDashboardDisplayState = resolveDashboardDisplayState;
-}
+    if (typeof root !== "undefined") {
+        root.getBrowserConnection = getBrowserConnection;
+        root.resolveNetworkType = resolveNetworkType;
+        root.isDeviceOffline = isDeviceOffline;
+        root.resolveConnectivityIndicator = resolveConnectivityIndicator;
+        root.resolveDashboardDisplayState = resolveDashboardDisplayState;
+    }
 
-if (typeof module !== "undefined" && module.exports) {
-    module.exports = {
-        getBrowserConnection,
-        resolveNetworkType,
-        isDeviceOffline,
-        resolveConnectivityIndicator,
-        resolveDashboardDisplayState
-    };
-}
+    if (typeof module !== "undefined" && module.exports) {
+        module.exports = {
+            getBrowserConnection,
+            resolveNetworkType,
+            isDeviceOffline,
+            resolveConnectivityIndicator,
+            resolveDashboardDisplayState
+        };
+    }
+})(typeof globalThis !== "undefined" ? globalThis : this);

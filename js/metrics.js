@@ -5,7 +5,10 @@
  * network performance metrics. Works in both browser (globals) and Node.js.
  */
 
-const METRIC_UNITS = Object.freeze({
+(function (root) {
+    "use strict";
+
+    const METRIC_UNITS = Object.freeze({
     download: "Mbps",
     download_mbps: "Mbps",
     upload: "Mbps",
@@ -87,26 +90,27 @@ function formatNetworkMetric(metricType, value, decimals = 1) {
     return formatMetric(value, unit, decimals);
 }
 
-if (typeof globalThis !== "undefined") {
-    globalThis.METRIC_UNITS = METRIC_UNITS;
-    globalThis.isValidMetric = isValidMetric;
-    globalThis.safeNumber = safeNumber;
-    globalThis.firstValid = firstValid;
-    globalThis.isValidMetricNumber = isValidMetricNumber;
-    globalThis.formatNumber = formatNumber;
-    globalThis.formatMetric = formatMetric;
-    globalThis.formatNetworkMetric = formatNetworkMetric;
-}
+    if (typeof root !== "undefined") {
+        root.METRIC_UNITS = METRIC_UNITS;
+        root.isValidMetric = isValidMetric;
+        root.safeNumber = safeNumber;
+        root.firstValid = firstValid;
+        root.isValidMetricNumber = isValidMetricNumber;
+        root.formatNumber = formatNumber;
+        root.formatMetric = formatMetric;
+        root.formatNetworkMetric = formatNetworkMetric;
+    }
 
-if (typeof module !== "undefined" && module.exports) {
-    module.exports = {
-        METRIC_UNITS,
-        isValidMetric,
-        safeNumber,
-        firstValid,
-        isValidMetricNumber,
-        formatNumber,
-        formatMetric,
-        formatNetworkMetric
-    };
-}
+    if (typeof module !== "undefined" && module.exports) {
+        module.exports = {
+            METRIC_UNITS,
+            isValidMetric,
+            safeNumber,
+            firstValid,
+            isValidMetricNumber,
+            formatNumber,
+            formatMetric,
+            formatNetworkMetric
+        };
+    }
+})(typeof globalThis !== "undefined" ? globalThis : this);
