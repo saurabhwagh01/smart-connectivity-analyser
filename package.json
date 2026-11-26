@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "description": "Web application for monitoring internet connectivity and analysing network performance.",
   "scripts": {
+<<<<<<< HEAD
     "test": "node --test tests/connectivity-score.test.js tests/metric_formatting.test.js tests/history-filters.test.js tests/diagnostic-profiles.test.js tests/modules-architecture.test.js",
+=======
+    "test": "node --test tests/connectivity-score.test.js tests/metric_formatting.test.js tests/history-filters.test.js tests/diagnostic-profiles.test.js",
+>>>>>>> 0dddf6ef983d2deb01452d866e5b2714ae435bf9
     "test:browser": "node --test tests/dashboard-empty-states.test.js"
   },
   "keywords": [

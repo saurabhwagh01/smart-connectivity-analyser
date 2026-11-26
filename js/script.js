@@ -8,7 +8,7 @@ const API_BASE =
         ? window.API_BASE
         : "http://127.0.0.1:8000/api";
 
-const $ = (id) => document.getElementById(id);
+const $ = (id) => typeof document === "undefined" ? null : document.getElementById(id);
 
 let applicationInitialized = false;
 let testInProgress = false;
@@ -154,6 +154,7 @@ async function initializeApplication() {
     wasDeviceOffline = isDeviceOffline();
 
     setupButtons();
+    await loadDiagnosticProfiles();
     setupNetworkListeners();
     detectNetworkType();
     applyConnectivityStatusIndicator();
@@ -1533,11 +1534,23 @@ async function startNetworkTest() {
 
     const button = $("startTest");
 
+    // NEW: profile selection (null = original standard test)
+    const profile = getSelectedProfile();
+    const runsBandwidth =
+        !profile ||
+        profile.checks.includes("download") ||
+        profile.checks.includes("upload");
+    let outcome = null;
+
     setStartButtonBusy(button, true);
+    setProfileSelectorDisabled(true);
+    renderProfileResultLoading(profile);
 
     setText(
         "testMessage",
-        "Measuring download, upload, ping and jitter..."
+        profile
+            ? `Running ${profile.label} (about ${profile.estimated_seconds}s)...`
+            : "Measuring download, upload, ping and jitter..."
     );
 
     currentMetrics = {
@@ -1556,8 +1569,10 @@ async function startNetworkTest() {
     try {
         const [backendResult, bandwidthResult] =
             await Promise.all([
-                runBackendNetworkQualityTest(),
-                runCloudflareBandwidthTest()
+                runBackendNetworkQualityTest(profile?.id ?? null),
+                runsBandwidth
+                    ? runCloudflareBandwidthTest()
+                    : Promise.resolve(null)
             ]);
 
         if (abortTestIfOffline()) return;
@@ -1565,9 +1580,12 @@ async function startNetworkTest() {
         applyBackendMetrics(backendResult);
         applyBandwidthMetrics(bandwidthResult);
 
+        // Browser-latency fallback only for the standard test.
+        // Profiles must not silently swap in a different measurement.
         if (
-            currentMetrics.ping === null ||
-            currentMetrics.jitter === null
+            !profile &&
+            (currentMetrics.ping === null ||
+                currentMetrics.jitter === null)
         ) {
             const latency = await measureBrowserLatency();
 
@@ -1583,6 +1601,12 @@ async function startNetworkTest() {
         }
 
         if (abortTestIfOffline()) return;
+
+        outcome = renderProfileResult(
+            profile,
+            backendResult,
+            bandwidthResult
+        );
 
         detectNetworkType();
 
@@ -1622,14 +1646,20 @@ async function startNetworkTest() {
         updateHistoryChart(sessionTests);
         updateSessionStatistics();
 
-        await saveNetworkTest(entry);
+        // Do not save an empty record when every check failed.
+        if (outcome?.state !== "error") {
+            await saveNetworkTest(entry);
+        }
 
-        setText(
-            "testMessage",
-            "Network test completed successfully."
+        setText("testMessage", describeOutcome(profile, outcome));
+
+        showToast(
+            outcome?.state === "partial"
+                ? "Test finished with some failed checks."
+                : outcome?.state === "error"
+                    ? "Diagnostic failed."
+                    : "Network test completed."
         );
-
-        showToast("Network test completed.");
 
     } catch (error) {
         console.error("Network test failed:", error);
@@ -1645,6 +1675,11 @@ async function startNetworkTest() {
         testInProgress = false;
 
         setStartButtonBusy(button, false);
+        setProfileSelectorDisabled(false);
+
+        if (profile && outcome === null) {
+            renderProfileResultStopped();
+        }
 
         if (isDeviceOffline()) {
             clearLiveMetrics();
@@ -1656,15 +1691,262 @@ async function startNetworkTest() {
         }
     }
 }
+/* =========================================================
+   DIAGNOSTIC PROFILES
+   ========================================================= */
 
+let diagnosticProfiles = [];
+let selectedProfileId = null; // null = standard test (original behaviour)
+let lastBackendError = null;
+
+const CHECK_LABELS = {
+    ping: "Latency (ping)",
+    jitter: "Jitter",
+    packet_loss: "Packet loss",
+    download: "Download speed",
+    upload: "Upload speed"
+};
+
+const CHECK_VALUES = {
+    ping: ["ping_ms", "ms"],
+    jitter: ["jitter_ms", "ms"],
+    packet_loss: ["packet_loss", "%"]
+};
+
+async function readApiError(response) {
+    try {
+        const body = await response.json();
+        const detail = body?.detail;
+        if (typeof detail === "string") return detail;
+        if (detail?.error) return detail.error;
+    } catch (_) { /* fall through */ }
+    return `Request failed (${response.status}).`;
+}
+
+async function loadDiagnosticProfiles(fetchProfiles = fetch) {
+    try {
+        const response = await fetchProfiles(`${API_BASE}/diagnostic-profiles`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        const data = await response.json();
+        diagnosticProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+    } catch (error) {
+        console.warn("Diagnostic profiles unavailable:", error.message);
+        diagnosticProfiles = [];
+    }
+
+    if (!diagnosticProfiles.some((p) => p.id === selectedProfileId)) {
+        selectedProfileId = null;
+    }
+    renderProfileSelector();
+    return diagnosticProfiles;
+}
+
+function getSelectedProfile() {
+    return diagnosticProfiles.find((p) => p.id === selectedProfileId) ?? null;
+}
+
+function selectDiagnosticProfile(profileId) {
+    selectedProfileId = diagnosticProfiles.some((profile) => profile.id === profileId)
+        ? profileId
+        : null;
+    renderProfileSelector();
+    return getSelectedProfile();
+}
+
+function renderProfileSelector() {
+    const container = $("profileSelector");
+    const note = $("profileNote");
+    if (!container || typeof document === "undefined") return;
+
+    container.replaceChildren();
+    const choices = [
+        { id: "", label: "Standard Test", description: "The original full network test." },
+        ...diagnosticProfiles
+    ];
+
+    choices.forEach((profile) => {
+        const label = document.createElement("label");
+        label.className = "profile-card";
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = "diagnosticProfile";
+        input.value = profile.id;
+        input.checked = (profile.id || null) === selectedProfileId;
+        input.addEventListener("change", () => {
+            selectedProfileId = input.value || null;
+        });
+        const title = document.createElement("span");
+        title.className = "profile-title";
+        title.textContent = profile.label;
+        const description = document.createElement("small");
+        description.className = "profile-desc";
+        description.textContent = profile.description || "";
+        label.append(input, title, description);
+        container.append(label);
+    });
+    if (note) note.hidden = diagnosticProfiles.length > 0;
+}
+
+/* Pure logic: no DOM. Builds per-check rows from THIS run only. */
+function evaluateProfileResult(
+    profile,
+    backendResult,
+    bandwidthResult,
+    backendError = null
+) {
+    const backendChecks = backendResult?.checks ?? {};
+
+    const rows = profile.checks.map((check) => {
+        if (check === "download" || check === "upload") {
+            const value = bandwidthResult?.[check];
+            return isValidMetric(value)
+                ? { check, status: "ok", detail: `${Number(value).toFixed(2)} Mbps` }
+                : { check, status: "failed", detail: "Speed test unavailable or timed out." };
+        }
+
+        const info = backendChecks[check];
+
+        if (!backendResult || !info) {
+            return {
+                check,
+                status: "failed",
+                detail: backendError || "The backend did not return this check."
+            };
+        }
+
+        if (info.status === "ok") {
+            const [key, unit] = CHECK_VALUES[check];
+            const value = backendResult[key];
+            if (!isValidMetric(value)) {
+                return {
+                    check,
+                    status: "failed",
+                    detail: "The backend marked this check successful without a valid measurement."
+                };
+            }
+            return {
+                check,
+                status: "ok",
+                detail: `${Number(value).toFixed(2)} ${unit}`
+            };
+        }
+
+        return { check, status: "failed", detail: info.reason || "Check failed." };
+    });
+
+    const failed = rows.filter((row) => row.status === "failed");
+
+    const state =
+        failed.length === 0 ? "success"
+        : failed.length === rows.length ? "error"
+        : "partial";
+
+    return {
+        state,
+        rows,
+        failed: failed.map((row) => CHECK_LABELS[row.check] ?? row.check),
+        measuredAt: backendResult?.measured_at ?? null
+    };
+}
+
+function setProfileSelectorDisabled(disabled) {
+    const container = $("profileSelector");
+    if (container) container.disabled = disabled;
+}
+
+function showProfilePanel(state, build) {
+    const panel = $("profileResult");
+    if (!panel) return;
+    panel.hidden = false;
+    panel.dataset.state = state;
+    panel.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+    panel.replaceChildren();
+    build(panel);
+}
+
+function renderProfileResultLoading(profile) {
+    const panel = $("profileResult");
+    if (!profile) {
+        if (panel) panel.hidden = true;
+        return;
+    }
+    showProfilePanel("loading", (p) => {
+        p.textContent = `Running ${profile.label}... please keep this tab open.`;
+    });
+}
+
+function renderProfileResultStopped() {
+    showProfilePanel("error", (p) => {
+        p.textContent = "The test stopped before it finished. No fresh results to show.";
+    });
+}
+
+function renderProfileResult(profile, backendResult, bandwidthResult) {
+    if (!profile) return null;
+    const evaluation = evaluateProfileResult(profile, backendResult, bandwidthResult, lastBackendError);
+
+    showProfilePanel(evaluation.state, (panel) => {
+        const heading = document.createElement("strong");
+        heading.textContent = profile.label;
+
+        const when = evaluation.measuredAt
+            ? document.createElement("span")
+            : null;
+        if (when) {
+            when.className = "profile-time";
+            when.textContent = ` Measured at ${new Date(evaluation.measuredAt).toLocaleTimeString()}`;
+        }
+
+        const list = document.createElement("ul");
+        evaluation.rows.forEach((row) => {
+            const item = document.createElement("li");
+
+            const badge = document.createElement("span");
+            badge.className = "check-badge";
+            badge.dataset.status = row.status;
+            badge.textContent = row.status === "ok" ? "OK" : "Failed";
+
+            const name = document.createElement("span");
+            name.textContent = CHECK_LABELS[row.check] ?? row.check;
+
+            const detail = document.createElement("span");
+            detail.className = "profile-desc";
+            detail.textContent = row.detail;
+
+            item.append(badge, name, detail);
+            list.append(item);
+        });
+
+        panel.append(heading, ...(when ? [when] : []), list);
+    });
+
+    return { state: evaluation.state, failed: evaluation.failed };
+}
+
+function describeOutcome(profile, outcome) {
+    if (!profile || !outcome) return "Network test completed successfully.";
+    if (outcome.state === "success") {
+        return `${profile.label} completed. All checks succeeded.`;
+    }
+    if (outcome.state === "partial") {
+        return `${profile.label} finished, but ${outcome.failed.length} check(s) failed: ${outcome.failed.join(", ")}.`;
+    }
+    return `${profile.label} failed. No check produced a result.`;
+}
 /* =========================================================
    BACKEND NETWORK QUALITY
    ========================================================= */
 
-async function runBackendNetworkQualityTest() {
+async function runBackendNetworkQualityTest(profileId = null) {
+    lastBackendError = null;
+
     try {
+        const query = profileId
+            ? `?profile=${encodeURIComponent(profileId)}`
+            : "";
+
         const response = await fetch(
-            `${API_BASE}/network-quality`,
+            `${API_BASE}/network-quality${query}`,
             {
                 method: "GET",
                 cache: "no-store"
@@ -1672,6 +1954,7 @@ async function runBackendNetworkQualityTest() {
         );
 
         if (!response.ok) {
+            lastBackendError = await readApiError(response);
             throw new Error(
                 `Network quality API returned ${response.status}`
             );
@@ -1688,6 +1971,8 @@ async function runBackendNetworkQualityTest() {
             "Backend network-quality endpoint unavailable:",
             error.message
         );
+
+        lastBackendError = lastBackendError || error.message;
 
         return null;
     }
@@ -2744,6 +3029,11 @@ if (typeof module !== "undefined" && module.exports) {
         formatMetric,
         formatNetworkMetric,
         validateHistoryFilterValues,
+        evaluateProfileResult,
+        loadDiagnosticProfiles,
+        selectDiagnosticProfile,
+        getSelectedProfile,
+        describeOutcome,
         calculateConnectivityScore: sharedCalculateConnectivityScore,
         getConnectivityStatus,
         resolveConnectivityIndicator,
@@ -2768,3 +3058,4 @@ if (typeof module !== "undefined" && module.exports) {
 /* =========================================================
    END OF SCRIPT
    ========================================================= */
+
