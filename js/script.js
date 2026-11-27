@@ -1536,8 +1536,6 @@ async function startNetworkTest() {
     testInProgress = true;
     metricsRestoredFromHistory = false;
     offlineClearedMetrics = false;
-    lastCompletedDiagnostic = null;
-
     const button = $("startTest");
 
     // NEW: profile selection (null = original standard test)
