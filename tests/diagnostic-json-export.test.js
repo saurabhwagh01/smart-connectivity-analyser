@@ -129,10 +129,80 @@ describe("Diagnostic JSON Export", () => {
             "2026-11-27T06:10:00.000Z"
         );
 
+        assert.deepEqual(
+            Object.keys(report).sort(),
+            [
+                "schema_version",
+                "exported_at",
+                "diagnostic",
+                "measurement_metadata",
+                "metrics"
+            ].sort()
+        );
+
         assert.equal(report.schema_version, "1.0.0");
         assert.equal(report.exported_at, "2026-11-27T06:10:00.000Z");
+
+        assert.deepEqual(
+            Object.keys(report.diagnostic).sort(),
+            [
+                "status",
+                "result_status",
+                "timestamp",
+                "network_type"
+            ].sort()
+        );
+
         assert.equal(report.diagnostic.status, "completed");
         assert.equal(report.diagnostic.result_status, "complete");
+        assert.equal(report.diagnostic.timestamp, diagnostic.timestamp);
+        assert.equal(report.diagnostic.network_type, "Wi-Fi");
+
+        assert.deepEqual(
+            Object.keys(report.measurement_metadata).sort(),
+            ["source", "units"].sort()
+        );
+
+        assert.equal(
+            report.measurement_metadata.source,
+            "Smart Connectivity Analyser"
+        );
+
+        assert.deepEqual(
+            Object.keys(report.measurement_metadata.units).sort(),
+            [
+                "download_mbps",
+                "upload_mbps",
+                "ping_ms",
+                "jitter_ms",
+                "packet_loss_percent",
+                "connectivity_score"
+            ].sort()
+        );
+
+        assert.deepEqual(
+            report.measurement_metadata.units,
+            {
+                download_mbps: "Mbps",
+                upload_mbps: "Mbps",
+                ping_ms: "ms",
+                jitter_ms: "ms",
+                packet_loss_percent: "%",
+                connectivity_score: "score"
+            }
+        );
+
+        assert.deepEqual(
+            Object.keys(report.metrics).sort(),
+            [
+                "download_mbps",
+                "upload_mbps",
+                "ping_ms",
+                "jitter_ms",
+                "packet_loss_percent",
+                "connectivity_score"
+            ].sort()
+        );
 
         assert.equal(report.metrics.download_mbps, 100);
         assert.equal(report.metrics.upload_mbps, 50);
@@ -187,6 +257,68 @@ describe("Diagnostic JSON Export", () => {
         }
     });
 
+    it("accepts valid upper boundary values for packet loss and score", () => {
+        const diagnostic = {
+            download: 0,
+            upload: 0,
+            ping: 0,
+            jitter: 0,
+            packetLoss: 100,
+            score: 100,
+            networkType: "Wi-Fi",
+            timestamp: "2026-11-27T06:00:00.000Z"
+        };
+
+        const report = buildDiagnosticJSON(diagnostic);
+
+        assert.equal(report.metrics.packet_loss_percent, 100);
+        assert.equal(report.metrics.connectivity_score, 100);
+        assert.equal(report.diagnostic.result_status, "complete");
+    });
+
+    it("converts negative and out-of-range metric values to null", () => {
+        const diagnostic = {
+            download: -10,
+            upload: -5,
+            ping: -20,
+            jitter: -2,
+            packetLoss: 101,
+            score: 150,
+            networkType: "Wi-Fi",
+            timestamp: "2026-11-27T06:00:00.000Z"
+        };
+
+        const report = buildDiagnosticJSON(diagnostic);
+
+        for (const value of Object.values(report.metrics)) {
+            assert.equal(value, null);
+        }
+
+        assert.equal(report.diagnostic.result_status, "partial");
+    });
+
+    it("converts non-finite and non-numeric metric values to null", () => {
+        const diagnostic = {
+            download: NaN,
+            upload: Infinity,
+            ping: "25.6",
+            jitter: -Infinity,
+            packetLoss: undefined,
+            score: 85,
+            networkType: "Wi-Fi",
+            timestamp: "2026-11-27T06:00:00.000Z"
+        };
+
+        const report = buildDiagnosticJSON(diagnostic);
+
+        assert.equal(report.metrics.download_mbps, null);
+        assert.equal(report.metrics.upload_mbps, null);
+        assert.equal(report.metrics.ping_ms, null);
+        assert.equal(report.metrics.jitter_ms, null);
+        assert.equal(report.metrics.packet_loss_percent, null);
+        assert.equal(report.metrics.connectivity_score, 85);
+    });
+
     it("downloads a completed diagnostic as a JSON file", () => {
         const {
             context,
@@ -228,6 +360,59 @@ describe("Diagnostic JSON Export", () => {
         assert.deepEqual(revokedUrls, ["blob:test-0"]);
     });
 
+    it("does not export when no completed diagnostic exists", () => {
+        const {
+            context,
+            downloads,
+            elements
+        } = createExportTestContext();
+
+        context.exportDiagnosticToJSON();
+
+        assert.equal(downloads.length, 0);
+
+        assert.equal(
+            elements["toast-message"].textContent,
+            "No completed diagnostic available to export."
+        );
+    });
+
+    it("handles JSON export failures gracefully", () => {
+        const {
+            context,
+            downloads,
+            elements
+        } = createExportTestContext();
+
+        vm.runInContext(`
+            lastCompletedDiagnostic = {
+                download: 100,
+                upload: 50,
+                ping: 20,
+                jitter: 5,
+                packetLoss: 0,
+                score: 95,
+                networkType: "Wi-Fi",
+                timestamp: "2026-11-27T06:00:00.000Z"
+            };
+        `, context);
+
+        context.URL.createObjectURL = () => {
+            throw new Error("Simulated download failure");
+        };
+
+        assert.doesNotThrow(() => {
+            context.exportDiagnosticToJSON();
+        });
+
+        assert.equal(downloads.length, 0);
+
+        assert.equal(
+            elements["toast-message"].textContent,
+            "Could not export diagnostic JSON."
+        );
+    });
+
     it("does not export sensitive location information", () => {
         const diagnostic = {
             download: 10,
@@ -249,27 +434,5 @@ describe("Diagnostic JSON Export", () => {
         assert.equal("longitude" in report, false);
         assert.equal(exportedJSON.includes("28.6139"), false);
         assert.equal(exportedJSON.includes("77.209"), false);
-    });
-
-    it("converts invalid metric values to null", () => {
-        const diagnostic = {
-            download: NaN,
-            upload: Infinity,
-            ping: "25.6",
-            jitter: -Infinity,
-            packetLoss: undefined,
-            score: 85,
-            networkType: "Wi-Fi",
-            timestamp: "2026-11-27T06:00:00.000Z"
-        };
-
-        const report = buildDiagnosticJSON(diagnostic);
-
-        assert.equal(report.metrics.download_mbps, null);
-        assert.equal(report.metrics.upload_mbps, null);
-        assert.equal(report.metrics.ping_ms, null);
-        assert.equal(report.metrics.jitter_ms, null);
-        assert.equal(report.metrics.packet_loss_percent, null);
-        assert.equal(report.metrics.connectivity_score, 85);
     });
 });

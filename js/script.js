@@ -2910,8 +2910,11 @@ link.download = `connectivity-diagnostic-${datePart}.json`;
     }
 }
 function buildDiagnosticJSON(diagnostic, exportedAt = new Date().toISOString()) {
-    const toMetric = (value) =>
-    typeof value === "number" && Number.isFinite(value)
+    const toMetric = (value, max = Infinity) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= max
         ? value
         : null;
 
@@ -2920,8 +2923,8 @@ const metrics = {
     upload_mbps: toMetric(diagnostic.upload),
     ping_ms: toMetric(diagnostic.ping),
     jitter_ms: toMetric(diagnostic.jitter),
-    packet_loss_percent: toMetric(diagnostic.packetLoss),
-    connectivity_score: toMetric(diagnostic.score)
+    packet_loss_percent: toMetric(diagnostic.packetLoss, 100),
+    connectivity_score: toMetric(diagnostic.score, 100)
 };
 
 
