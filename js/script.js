@@ -3257,6 +3257,7 @@ if (typeof module !== "undefined" && module.exports) {
         loadNetworkHistory,
         normalizeHistoryItem,
         buildDiagnosticJSON,
+        exportDiagnosticToJSON,
         applyHistoryMetricFilter,
         smartConnectivity,
         resolveNetworkType,

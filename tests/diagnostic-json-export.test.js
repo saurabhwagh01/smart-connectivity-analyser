@@ -1,8 +1,115 @@
 
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 
 const { buildDiagnosticJSON } = require("../js/script.js");
+
+function createExportTestContext() {
+    const downloads = [];
+    const revokedUrls = [];
+
+    const elements = {
+        toast: {
+            classList: {
+                add() {},
+                remove() {}
+            }
+        },
+        "toast-message": {
+            textContent: ""
+        }
+    };
+
+    const document = {
+        readyState: "loading",
+
+        addEventListener() {},
+
+        getElementById(id) {
+            return elements[id] || null;
+        },
+
+        createElement(tag) {
+            assert.equal(tag, "a");
+
+            const link = {
+                click() {
+                    downloads.push({
+                        href: this.href,
+                        download: this.download
+                    });
+                },
+
+                remove() {
+                    this.removed = true;
+                }
+            };
+
+            return link;
+        },
+
+        body: {
+            appendChild(link) {
+                link.appended = true;
+            }
+        }
+    };
+
+    const URLMock = {
+        createObjectURL(blob) {
+            const url = `blob:test-${downloads.length}`;
+            downloads.push({ blob, url });
+            return url;
+        },
+
+        revokeObjectURL(url) {
+            revokedUrls.push(url);
+        }
+    };
+
+    const sandbox = {
+        console,
+        document,
+        URL: URLMock,
+        Blob,
+        setTimeout,
+        clearTimeout,
+        Math,
+        Date
+    };
+
+    sandbox.globalThis = sandbox;
+
+    const context = vm.createContext(sandbox);
+
+    const scripts = [
+        "../js/connectivity-score.js",
+        "../js/metrics.js",
+        "../js/network-status.js",
+        "../js/script.js"
+    ];
+
+    for (const script of scripts) {
+        const source = fs.readFileSync(
+            path.join(__dirname, script),
+            "utf8"
+        );
+
+        vm.runInContext(source, context, {
+            filename: script
+        });
+    }
+
+    return {
+        context,
+        downloads,
+        revokedUrls,
+        elements
+    };
+}
 
 describe("Diagnostic JSON Export", () => {
     it("exports a complete diagnostic with the correct schema", () => {
@@ -78,6 +185,47 @@ describe("Diagnostic JSON Export", () => {
         for (const value of Object.values(report.metrics)) {
             assert.equal(value, 0);
         }
+    });
+
+    it("downloads a completed diagnostic as a JSON file", () => {
+        const {
+            context,
+            downloads,
+            revokedUrls
+        } = createExportTestContext();
+
+        vm.runInContext(`
+            lastCompletedDiagnostic = {
+                download: 100,
+                upload: 50,
+                ping: 20,
+                jitter: 5,
+                packetLoss: 0,
+                score: 95,
+                networkType: "Wi-Fi",
+                timestamp: "2026-11-27T06:00:00.000Z"
+            };
+        `, context);
+
+        context.exportDiagnosticToJSON();
+
+        const blobEntry = downloads.find(entry => entry.blob);
+
+        assert.ok(blobEntry, "Expected a JSON Blob to be created");
+
+        assert.equal(
+            blobEntry.blob.type,
+            "application/json;charset=utf-8"
+        );
+
+        assert.equal(
+            downloads.some(entry =>
+                entry.download === "connectivity-diagnostic-2026-11-27.json"
+            ),
+            true
+        );
+
+        assert.deepEqual(revokedUrls, ["blob:test-0"]);
     });
 
     it("does not export sensitive location information", () => {
