@@ -97,4 +97,3 @@ def check_dns(
         (time.perf_counter() - started) * 1000, 2
     )
     return result
-

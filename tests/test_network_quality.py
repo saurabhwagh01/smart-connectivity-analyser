@@ -192,5 +192,3 @@ def test_network_quality_response_keeps_legacy_fields(client, monkeypatch):
         "jitter_ms",
         "status",
     }.issubset(data)
-
-

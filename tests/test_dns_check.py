@@ -204,4 +204,3 @@ def test_dns_failures_do_not_affect_network_measurements(monkeypatch):
     assert quality_response.status_code == 200
     assert quality_response.json()["ping_ms"] == 16.0
     assert quality_response.json()["packet_loss"] == 0.0
-

@@ -53,4 +53,3 @@ test("handles an unavailable API result", () => {
         "Server DNS: status unavailable."
     );
 });
-

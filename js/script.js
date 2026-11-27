@@ -21,6 +21,7 @@ let savedMarkers = [];
 let sessionTimer = null;
 let sessionStartTime = Date.now();
 let lastTestTime = null;
+let lastCompletedDiagnostic = null;
 let downtimeSeconds = 0;
 let currentLocation = null;
 let sessionTests = [];
@@ -186,6 +187,10 @@ function setupButtons() {
     $("exportCSV")?.addEventListener(
         "click",
         exportHistoryToCSV
+    );
+    $("exportJSON")?.addEventListener(
+      "click",
+       exportDiagnosticToJSON
     );
 
     $("historyRange")?.addEventListener("change", (event) => {
@@ -1531,7 +1536,6 @@ async function startNetworkTest() {
     testInProgress = true;
     metricsRestoredFromHistory = false;
     offlineClearedMetrics = false;
-
     const button = $("startTest");
 
     // NEW: profile selection (null = original standard test)
@@ -1662,6 +1666,11 @@ async function startNetworkTest() {
         // Do not save an empty record when every check failed.
         if (outcome?.state !== "error") {
             await saveNetworkTest(entry);
+
+            lastCompletedDiagnostic = {
+                ...currentMetrics,
+                timestamp: lastTestTime
+            };
         }
 
         setText("testMessage", describeOutcome(profile, outcome));
@@ -1673,6 +1682,7 @@ async function startNetworkTest() {
                     ? "Diagnostic failed."
                     : "Network test completed."
         );
+        
 
     } catch (error) {
         console.error("Network test failed:", error);
@@ -2853,8 +2863,102 @@ async function saveNetworkTest(testData) {
             error.message
         );
     }
-}
 
+
+}
+function exportDiagnosticToJSON() {
+    if (!lastCompletedDiagnostic) {
+        showToast("No completed diagnostic available to export.");
+        return;
+    }
+
+    try {
+        const report = buildDiagnosticJSON(
+            lastCompletedDiagnostic
+        );
+
+        const json = JSON.stringify(report, null, 2);
+
+        const blob = new Blob(
+            [json],
+            { type: "application/json;charset=utf-8" }
+        );
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+
+        link.href = url;
+        const timestamp = report.diagnostic.timestamp;
+
+const datePart =
+    typeof timestamp === "string" && timestamp.length >= 10
+        ? timestamp.slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+
+link.download = `connectivity-diagnostic-${datePart}.json`;
+
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        URL.revokeObjectURL(url);
+
+        showToast("Diagnostic JSON exported successfully.");
+    } catch (error) {
+        console.error("JSON export failed:", error);
+        showToast("Could not export diagnostic JSON.");
+    }
+}
+function buildDiagnosticJSON(diagnostic, exportedAt = new Date().toISOString()) {
+    const toMetric = (value, max = Infinity) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= max
+        ? value
+        : null;
+
+const metrics = {
+    download_mbps: toMetric(diagnostic.download),
+    upload_mbps: toMetric(diagnostic.upload),
+    ping_ms: toMetric(diagnostic.ping),
+    jitter_ms: toMetric(diagnostic.jitter),
+    packet_loss_percent: toMetric(diagnostic.packetLoss, 100),
+    connectivity_score: toMetric(diagnostic.score, 100)
+};
+
+
+    const availableMetrics = Object.values(metrics)
+        .filter(value =>
+            typeof value === "number" &&
+            Number.isFinite(value)
+        ).length;
+
+    return {
+        schema_version: "1.0.0",
+        exported_at: exportedAt,
+        diagnostic: {
+            status: "completed",
+            result_status: availableMetrics === Object.keys(metrics).length
+                ? "complete"
+                : "partial",
+            timestamp: diagnostic.timestamp,
+            network_type: diagnostic.networkType ?? "Unknown"
+        },
+        measurement_metadata: {
+            source: "Smart Connectivity Analyser",
+            units: {
+                download_mbps: "Mbps",
+                upload_mbps: "Mbps",
+                ping_ms: "ms",
+                jitter_ms: "ms",
+                packet_loss_percent: "%",
+                connectivity_score: "score"
+            }
+        },
+        metrics
+    };
+}
 /* =========================================================
    CSV EXPORT
    ========================================================= */
@@ -3087,6 +3191,8 @@ if (typeof window !== "undefined") {
     window.calculateConnectivityScore =
         sharedCalculateConnectivityScore;
 
+    window.buildDiagnosticJSON = buildDiagnosticJSON;
+    window.exportDiagnosticToJSON = exportDiagnosticToJSON;
     window.getConnectivityStatus =
         getConnectivityStatus;
 
@@ -3153,6 +3259,8 @@ if (typeof module !== "undefined" && module.exports) {
         formatAnomalyMetric,
         loadNetworkHistory,
         normalizeHistoryItem,
+        buildDiagnosticJSON,
+        exportDiagnosticToJSON,
         applyHistoryMetricFilter,
         smartConnectivity,
         resolveNetworkType,
