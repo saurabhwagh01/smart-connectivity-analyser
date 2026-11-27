@@ -16,11 +16,26 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-
+from fastapi import Query
+from backend.diagnostic_profiles import (
+    DEFAULT_PACKET_COUNT,
+    UnknownProfileError,
+    build_profile_result,
+    get_profile,
+    list_profiles,
+)
+from backend.timestamps import (
+    current_utc_timestamp,
+    to_canonical_utc,
+    utc_day_start,
+)
 from pathlib import Path
+from backend.protocol_diagnostics import detect_network_protocols
 
 import sqlite3
+from contextlib import closing, contextmanager
 import json
+import logging
 import math
 import sys
 
@@ -30,7 +45,7 @@ import subprocess
 import re
 
 import statistics
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 # ============================================================
 # AI MODEL IMPORTS
@@ -290,9 +305,40 @@ def get_connection():
 
     connection.row_factory = sqlite3.Row
 
-
+    # canonical_utc(timestamp) lets queries filter and sort stored values,
+    # including legacy formats, by their real UTC instant (issue #39).
+    connection.create_function(
+        "canonical_utc", 1, to_canonical_utc, deterministic=True
+    )
 
     return connection
+
+
+logger = logging.getLogger(__name__)
+
+HISTORY_READ_ERROR = "Could not load network history. Please try again later."
+HISTORY_SAVE_ERROR = "Could not save the network test. Please try again later."
+HISTORY_DELETE_ERROR = "Could not delete network history. Please try again later."
+
+
+@contextmanager
+def history_database(error_message):
+    """Open a history database connection and always close it.
+
+    SQLite errors are logged with full details on the server and returned to
+    the client as a 500 response with a fixed, user-friendly message, so
+    internal error text and file paths are not exposed.
+    """
+    connection = None
+    try:
+        connection = get_connection()
+        yield connection
+    except sqlite3.Error:
+        logger.exception("Network history database error: %s", error_message)
+        raise HTTPException(status_code=500, detail=error_message)
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 
@@ -469,16 +515,16 @@ class NetworkTest(BaseModel):
         if value is None or not value.strip():
             return None
 
-        try:
-            # Python < 3.11 does not accept a trailing "Z".
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
+        # Store one canonical UTC form (issue #39). Offsets are converted
+        # to the same instant in UTC; a timestamp without an offset is
+        # read as server local time, matching older stored records.
+        canonical = to_canonical_utc(value)
+        if canonical is None:
             raise ValueError(
                 "timestamp must be an ISO 8601 date-time string"
             )
 
-        # Keep the original string so stored values are unchanged.
-        return value
+        return canonical
 
 
     @model_validator(mode="after")
@@ -557,6 +603,66 @@ def health():
 
 
 # ============================================================
+# LIVENESS AND READINESS
+# ============================================================
+# /api/health/live only reports that the API process is responding.
+# /api/health/ready checks that the required SQLite history database is usable.
+# Neither endpoint runs network diagnostics, trains models, or loads AI models.
+
+
+def check_database_ready():
+    """Return True when the history database exists and has its table.
+
+    The file is opened read-only, so a probe can never create or change it,
+    and every failure is reduced to False so no internal detail can leak.
+    """
+    try:
+        # mode=ro prevents creating or changing the database; timeout=2
+        # bounds a locked-database wait; closing() always frees the connection.
+        with closing(
+            sqlite3.connect(f"{DB_PATH.as_uri()}?mode=ro", uri=True, timeout=2)
+        ) as connection:
+            # sqlite_master avoids reading or changing any user data.
+            row = connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'network_tests'"
+            ).fetchone()
+        return row is not None
+    except Exception:
+        # Every failure becomes False so no internal path or error text leaks.
+        return False
+
+
+@app.get("/api/health/live")
+def health_live():
+    return {"status": "alive"}
+
+
+@app.get("/api/health/ready")
+def health_ready():
+    database_ready = check_database_ready()
+
+    body = {
+        "status": "ready" if database_ready else "not_ready",
+        "checks": {
+            "database": "ok" if database_ready else "unavailable",
+        },
+        "optional": {
+            "ai_models": "available" if AI_MODELS_READY else "unavailable",
+        },
+    }
+
+    # A failed required dependency returns 503 with the same response schema.
+    return JSONResponse(status_code=200 if database_ready else 503, content=body)
+
+
+# ============================================================
+
+@app.get("/api/network-protocols")
+def network_protocols():
+    """Report independent IPv4/IPv6 connectivity without changing ping data."""
+    return detect_network_protocols()
+
 
 # SIMPLE PING
 
@@ -651,384 +757,122 @@ def build_ping_command(target, packet_count, timeout_seconds, system):
     ]
 
 
-# ============================================================
-
-# NETWORK QUALITY
-
-# ============================================================
-
-
-
-@app.get("/api/network-quality")
-
-def network_quality():
-
-
-
+def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
+    """Run the ping measurement. Raises HTTPException if ping cannot run."""
     target = "1.1.1.1"
-
-
-
-    packet_count = 10
-
-
-
     timeout_seconds = 2
 
     command = build_ping_command(
-        target,
-        packet_count,
-        timeout_seconds,
-        platform.system(),
+        target, packet_count, timeout_seconds, platform.system()
     )
 
-
+    # 10 packets keeps the original 30 s limit; longer runs scale up.
+    subprocess_timeout = max(30, packet_count * 2 + 10)
 
     try:
-
-
-
         process = subprocess.run(
-
             command,
-
             capture_output=True,
-
             text=True,
-
-            timeout=30
-
+            timeout=subprocess_timeout,
         )
-
-
-
         output = process.stdout
-
-
-
     except FileNotFoundError:
         raise HTTPException(
             status_code=503,
             detail="The ping command is not available on this server.",
         )
-
     except subprocess.TimeoutExpired:
-
-
-
-        raise HTTPException(
-
-            status_code=504,
-
-            detail="Ping measurement timed out."
-
-        )
-
-
-
+        raise HTTPException(status_code=504, detail="Ping measurement timed out.")
     except Exception as error:
-
-
-
         raise HTTPException(
-
-            status_code=500,
-
-            detail=f"Ping measurement failed: {error}"
-
+            status_code=500, detail=f"Ping measurement failed: {error}"
         )
-
-
-
-
-    # ========================================================
-    # PARSE PING TIMES AND PACKET LOSS
-    # ========================================================
 
     ping_times, packet_loss = parse_ping_output(output)
 
-    # No replies and no loss summary means ping failed to run
-    # (for example, no permission to send pings). That is not
-    # the same as a real 100% packet loss.
+    # No replies and no loss summary means ping failed to run, which is
+    # not the same as a real 100% packet loss.
     if not ping_times and packet_loss is None:
         reason = process.stderr.strip() or "ping produced no output"
         raise HTTPException(
-            status_code=503,
-            detail=f"Ping measurement failed: {reason}",
+            status_code=503, detail=f"Ping measurement failed: {reason}"
         )
 
-
-    # If ping printed no loss summary, estimate it from
-    # how many replies were received.
     if packet_loss is None:
-        packet_loss = (
-            (packet_count - len(ping_times))
-            / packet_count
-        ) * 100
-
-
-    # ========================================================
-    # NO RESPONSE
-    # ========================================================
-
-
+        packet_loss = ((packet_count - len(ping_times)) / packet_count) * 100
 
     if len(ping_times) == 0:
-
-
-
         return {
-
             "target": target,
-
             "packets_sent": packet_count,
-
             "packets_received": 0,
-
             "packet_loss": 100.0,
-
             "ping_ms": None,
-
             "min_ping_ms": None,
-
             "max_ping_ms": None,
-
             "jitter_ms": None,
-
-            "status": "unreachable"
-
+            "status": "unreachable",
         }
 
+    average_ping = statistics.mean(ping_times)
 
-
-
-
-    # ========================================================
-
-    # PING STATISTICS
-
-    # ========================================================
-
-
-
-    average_ping = statistics.mean(
-
-        ping_times
-
-    )
-
-
-
-    minimum_ping = min(
-
-        ping_times
-
-    )
-
-
-
-    maximum_ping = max(
-
-        ping_times
-
-    )
-
-
-
-
-
-    # ========================================================
-
-    # JITTER
-
-    #
-
-    # Mean absolute difference between consecutive
-
-    # successful ping measurements.
-
-    # ========================================================
-
-
-
+    # Jitter: mean absolute difference between consecutive replies.
     if len(ping_times) >= 2:
-
-
-
-        differences = []
-
-
-
-        for i in range(
-
-            1,
-
-            len(ping_times)
-
-        ):
-
-
-
-            difference = abs(
-
-                ping_times[i] -
-
-                ping_times[i - 1]
-
-            )
-
-
-
-            differences.append(
-
-                difference
-
-            )
-
-
-
-
-
         jitter = statistics.mean(
-
-            differences
-
+            abs(ping_times[i] - ping_times[i - 1])
+            for i in range(1, len(ping_times))
         )
-
-
-
     else:
-
-
-
         jitter = 0.0
 
-
-
-
-
-    # ========================================================
-
-    # STATUS
-
-    # ========================================================
-
-
-
     if average_ping <= 50:
-
-
-
         status = "excellent"
-
-
-
     elif average_ping <= 100:
-
-
-
         status = "good"
-
-
-
     elif average_ping <= 200:
-
-
-
         status = "average"
-
-
-
     else:
-
-
-
         status = "poor"
 
-
-
-
-
     return {
-
-
-
         "target": target,
-
-
-
         "packets_sent": packet_count,
-
-
-
-        "packets_received": len(
-
-            ping_times
-
-        ),
-
-
-
-        "packet_loss": round(
-
-            packet_loss,
-
-            2
-
-        ),
-
-
-
-        "ping_ms": round(
-
-            average_ping,
-
-            2
-
-        ),
-
-
-
-        "min_ping_ms": round(
-
-            minimum_ping,
-
-            2
-
-        ),
-
-
-
-        "max_ping_ms": round(
-
-            maximum_ping,
-
-            2
-
-        ),
-
-
-
-        "jitter_ms": round(
-
-            jitter,
-
-            2
-
-        ),
-
-
-
+        "packets_received": len(ping_times),
+        "packet_loss": round(packet_loss, 2),
+        "ping_ms": round(average_ping, 2),
+        "min_ping_ms": round(min(ping_times), 2),
+        "max_ping_ms": round(max(ping_times), 2),
+        "jitter_ms": round(jitter, 2),
         "samples": ping_times,
-
-
-
-        "status": status
-
+        "status": status,
     }
 
 
+@app.get("/api/diagnostic-profiles")
+def get_diagnostic_profiles():
+    return {"default": None, "profiles": list_profiles()}
 
+
+@app.get("/api/network-quality")
+def network_quality(profile: str | None = Query(default=None)):
+    # No profile: exactly the original behaviour (backward compatible).
+    if profile is None:
+        return measure_ping(DEFAULT_PACKET_COUNT)
+
+    try:
+        selected = get_profile(profile)
+    except UnknownProfileError:
+        valid = [p["id"] for p in list_profiles()]
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Unknown diagnostic profile '{profile}'.",
+                "valid_profiles": valid,
+            },
+        )
+
+    return build_profile_result(selected, measure_ping(selected.packet_count))
 
 
 # ============================================================
@@ -1049,7 +893,7 @@ def save_network_test(data: NetworkTest):
 
         data.timestamp
 
-        or datetime.now().isoformat()
+        or current_utc_timestamp()
 
     )
 
@@ -1057,109 +901,39 @@ def save_network_test(data: NetworkTest):
 
 
 
-    connection = get_connection()
-
-
-
-    cursor = connection.cursor()
-
-
-
-
-
-    cursor.execute(
-
-        """
-
-        INSERT INTO network_tests (
-
-            timestamp,
-
-            download_mbps,
-
-            upload_mbps,
-
-            ping_ms,
-
-            jitter_ms,
-
-            packet_loss,
-
-            network_type,
-
-            connectivity_score,
-
-            latitude,
-
-            longitude
-
+    with history_database(HISTORY_SAVE_ERROR) as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO network_tests (
+                timestamp,
+                download_mbps,
+                upload_mbps,
+                ping_ms,
+                jitter_ms,
+                packet_loss,
+                network_type,
+                connectivity_score,
+                latitude,
+                longitude
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                timestamp,
+                data.download_mbps,
+                data.upload_mbps,
+                data.ping_ms,
+                data.jitter_ms,
+                data.packet_loss,
+                data.network_type,
+                data.connectivity_score,
+                data.latitude,
+                data.longitude
+            )
         )
-
-
-
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-        """,
-
-
-
-        (
-
-            timestamp,
-
-
-
-            data.download_mbps,
-
-
-
-            data.upload_mbps,
-
-
-
-            data.ping_ms,
-
-
-
-            data.jitter_ms,
-
-
-
-            data.packet_loss,
-
-
-
-            data.network_type,
-
-
-
-            data.connectivity_score,
-
-
-
-            data.latitude,
-
-
-
-            data.longitude
-
-        )
-
-    )
-
-
-
-
-
-    connection.commit()
-
-
-
-    test_id = cursor.lastrowid
-
-
-
-    connection.close()
+        connection.commit()
+        test_id = cursor.lastrowid
 
 
 
@@ -1204,6 +978,27 @@ HISTORY_RANGE_WINDOWS = {
     "monthly": timedelta(days=365),
 }
 
+# Chronological order by UTC instant; id breaks ties between identical
+# instants. Records whose timestamp cannot be parsed come last.
+HISTORY_ORDER_BY = (
+    " ORDER BY canonical_utc(timestamp) IS NULL ASC,"
+    " canonical_utc(timestamp) ASC, id ASC"
+)
+
+
+def history_record(row):
+    """Return a history row with its timestamp in canonical UTC form.
+
+    The stored value is never changed. A legacy value that cannot be
+    parsed is returned as stored, so the record stays accessible.
+    """
+    record = dict(row)
+    record["timestamp"] = to_canonical_utc(record["timestamp"]) or record["timestamp"]
+    return record
+
+DEFAULT_NETWORK_HISTORY_PAGE_SIZE = 100
+MAX_NETWORK_HISTORY_PAGE_SIZE = 500
+
 
 @app.get("/api/network-history")
 def get_network_history(
@@ -1212,6 +1007,17 @@ def get_network_history(
     end_date: date | None = None,
     min_score: float | None = Query(default=None, ge=0, le=100),
     max_score: float | None = Query(default=None, ge=0, le=100),
+    limit: int | None = Query(
+        default=None,
+        ge=1,
+        le=MAX_NETWORK_HISTORY_PAGE_SIZE,
+        description="Maximum number of records to return (1-500).",
+    ),
+    offset: int | None = Query(
+        default=None,
+        ge=0,
+        description="Number of matching records to skip.",
+    ),
 ):
     if range != "all" and range not in HISTORY_RANGE_WINDOWS:
         supported = ", ".join(["all", *HISTORY_RANGE_WINDOWS])
@@ -1242,40 +1048,39 @@ def get_network_history(
             detail="min_score must be less than or equal to max_score",
         )
 
-    try:
-        connection = get_connection()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to connect to database: {exc}",
-        )
-
-    try:
+    with history_database(HISTORY_READ_ERROR) as connection:
         cursor = connection.cursor()
 
         conditions = []
         parameters = []
+
+        # Stored timestamps are compared by their UTC instant, so records
+        # in different formats and offsets filter correctly (issue #39).
+        # Canonical UTC strings have a fixed width, so text comparison of
+        # canonical values is chronological. Values that cannot be parsed
+        # become NULL and are left out of time filters.
 
         # Preserve the existing time-range behaviour
         # whenever a custom date range is not supplied.
         if start_date is None and end_date is None:
             if range != "all":
                 duration = HISTORY_RANGE_WINDOWS[range]
-                since = datetime.now() - duration
-                conditions.append("timestamp >= ?")
-                parameters.append(since.isoformat())
+                since = datetime.now(timezone.utc) - duration
+                conditions.append("canonical_utc(timestamp) >= ?")
+                parameters.append(to_canonical_utc(since.isoformat()))
 
         else:
+            # Calendar dates are UTC days.
             if start_date is not None:
-                conditions.append("timestamp >= ?")
-                parameters.append(start_date.isoformat())
+                conditions.append("canonical_utc(timestamp) >= ?")
+                parameters.append(utc_day_start(start_date))
 
             if end_date is not None:
                 # Exclusive upper boundary includes the entire end date.
                 end_exclusive = end_date + timedelta(days=1)
 
-                conditions.append("timestamp < ?")
-                parameters.append(end_exclusive.isoformat())
+                conditions.append("canonical_utc(timestamp) < ?")
+                parameters.append(utc_day_start(end_exclusive))
 
         if min_score is not None:
             conditions.append("connectivity_score >= ?")
@@ -1301,24 +1106,48 @@ def get_network_history(
             FROM network_tests
         """
 
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        query += " ORDER BY timestamp ASC"
-
-        cursor.execute(query, parameters)
-
-        rows = cursor.fetchall()
-
-        return [dict(row) for row in rows]
-
-    except sqlite3.Error as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database query error: {exc}",
+        where_clause = (
+            " WHERE " + " AND ".join(conditions)
+            if conditions
+            else ""
         )
-    finally:
-        connection.close()
+        query += where_clause
+
+        if limit is not None or offset is not None:
+            page_limit = (
+                limit if limit is not None else DEFAULT_NETWORK_HISTORY_PAGE_SIZE
+            )
+            page_offset = offset if offset is not None else 0
+
+            # Count the filtered records before applying page bounds.
+            cursor.execute(
+                "SELECT COUNT(*) FROM network_tests" + where_clause,
+                parameters,
+            )
+            total = cursor.fetchone()[0]
+
+            cursor.execute(
+                query + HISTORY_ORDER_BY + " LIMIT ? OFFSET ?",
+                parameters + [page_limit, page_offset],
+            )
+            records = [history_record(row) for row in cursor.fetchall()]
+            next_offset = page_offset + len(records)
+            has_more = next_offset < total
+
+            return {
+                "data": records,
+                "pagination": {
+                    "limit": page_limit,
+                    "offset": page_offset,
+                    "total": total,
+                    "has_more": has_more,
+                    "next_offset": next_offset if has_more else None,
+                },
+            }
+
+        # Keep the original list response for existing callers.
+        cursor.execute(query + HISTORY_ORDER_BY, parameters)
+        return [history_record(row) for row in cursor.fetchall()]
 
 
 
@@ -1361,12 +1190,12 @@ def ai_prediction():
     try:
         predicted_score = final_predictor.predict()
 
-        if predicted_score >= 75:
+        if predicted_score >= 80:
             quality = "Excellent"
-        elif predicted_score >= 50:
+        elif predicted_score >= 60:
             quality = "Good"
-        elif predicted_score >= 25:
-            quality = "Average"
+        elif predicted_score >= 40:
+            quality = "Fair"
         else:
             quality = "Poor"
 
@@ -1388,7 +1217,6 @@ def ai_prediction():
             status_code=500,
             detail=f"Prediction failed: {error}",
         )
-
 
 # ============================================================
 # AI ANOMALY
@@ -1513,27 +1341,9 @@ def delete_network_history():
 
 
 
-    connection = get_connection()
-
-
-
-    cursor = connection.cursor()
-
-
-
-    cursor.execute(
-
-        "DELETE FROM network_tests"
-
-    )
-
-
-
-    connection.commit()
-
-
-
-    connection.close()
+    with history_database(HISTORY_DELETE_ERROR) as connection:
+        connection.execute("DELETE FROM network_tests")
+        connection.commit()
 
 
 

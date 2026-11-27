@@ -22,12 +22,14 @@ if __package__:
         constrain_connectivity_predictions,
         is_valid_measurement_row,
     )
+    from .timestamps import canonical_sort_key, to_canonical_utc
 else:  # Support importing final_predictor directly from backend/.
     from model_config import (
         build_production_prediction_model,
         constrain_connectivity_predictions,
         is_valid_measurement_row,
     )
+    from timestamps import canonical_sort_key, to_canonical_utc
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -63,9 +65,8 @@ class FinalConnectivityPredictor:
             try:
                 rows = connection.execute(
                     f"""
-                    SELECT timestamp, {", ".join(FEATURES)}
+                    SELECT id, timestamp, {", ".join(FEATURES)}
                     FROM network_tests
-                    ORDER BY timestamp ASC, id ASC
                     """
                 ).fetchall()
 
@@ -83,10 +84,18 @@ class FinalConnectivityPredictor:
         finally:
             connection.close()
 
+        # Same chronological order as ai_engine.load_network_data():
+        # real UTC instant, then id (issue #39).
+        rows = sorted(
+            rows,
+            key=lambda row: canonical_sort_key(row["timestamp"], row["id"]),
+        )
+
         data = []
 
         for row in rows:
-            if row["timestamp"] is None:
+            # Records that cannot be placed in time are skipped.
+            if to_canonical_utc(row["timestamp"]) is None:
                 continue
 
             raw = [row[column] for column in FEATURES]

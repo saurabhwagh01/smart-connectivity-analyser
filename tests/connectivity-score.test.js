@@ -323,17 +323,17 @@ describe("calculateConnectivityScore", () => {
 
 describe("getConnectivityStatus", () => {
 
-    const cases = [
-        [100, "Excellent"],
+          const cases = [
+        [39, "Poor"],
+        [40, "Fair"],
+        [59, "Fair"],
+        [60, "Good"],
+        [79, "Good"],
+        [80, "Excellent"],
         [85, "Excellent"],
-        [84, "Good"],
-        [70, "Good"],
-        [69, "Average"],
-        [50, "Average"],
-        [49, "Poor"],
+        [100, "Excellent"],
         [0, "Poor"]
     ];
-
     for (const [score, status] of cases) {
 
         test(`score ${score} is ${status}`, () => {
@@ -355,6 +355,6 @@ describe("getConnectivityStatus", () => {
             packetLoss: 0.2
         });
 
-        assert.equal(getConnectivityStatus(score), "Good");
+        assert.equal(getConnectivityStatus(score), "Excellent");
     });
 });
