@@ -241,28 +241,15 @@ function calculateConnectivityScore(metrics) {
 
 
 function getConnectivityStatus(score) {
-
     let status = "Poor";
 
-
-    if (
-        score >= 85
-    ) {
+    if (score >= 80) {
         status = "Excellent";
-    }
-
-    else if (
-        score >= 70
-    ) {
+    } else if (score >= 60) {
         status = "Good";
+    } else if (score >= 40) {
+        status = "Fair";
     }
-
-    else if (
-        score >= 50
-    ) {
-        status = "Average";
-    }
-
 
     return status;
 }

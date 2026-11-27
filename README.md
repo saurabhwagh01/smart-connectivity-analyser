@@ -215,6 +215,7 @@ Make sure the backend is running before using frontend features that require API
 | GET | `/api/health/ready` | Check whether required dependencies are available |
 | GET | `/api/ping` | Check basic API connectivity |
 | GET | `/api/network-quality` | Measure network quality using the backend ping test |
+| GET | `/api/network-protocols` | Check IPv4 and IPv6 connectivity independently |
 
 | GET | `/api/diagnostic-profiles` | List the available diagnostic profiles |
 | GET | `/api/network-quality` | Measure network quality using the backend ping test. Optional `?profile=<id>` runs a diagnostic profile |
@@ -230,12 +231,16 @@ For request schemas and interactive endpoint testing, open `/docs` while the loc
 
 `/api/health/live` returns `200 {"status":"alive"}` while the API process is running. `/api/health/ready` returns `200` when the existing SQLite history database is usable and `503` when it is not; its response contains `checks.database` and `optional.ai_models`. AI model availability is reported but does not change the status code, and neither endpoint runs network tests or model training.
 
+`GET /api/network-protocols` reports a top-level `connected` flag and independent `ipv4` and `ipv6` results for the backend server's outbound network. Each protocol has a `status` of `available`, `unavailable`, or `unsupported`; unavailable results use a safe `reason` such as `dns_failure`, `timeout`, or `connection_failure`. The check uses a fixed hostname and HTTPS port, and it does not change the existing `/api/network-quality` response. This is a reachability probe for the backend host; it does not verify every destination or measure the browser device's ISP route.
+
 `POST /api/network-test` validates its input and returns `422` with details for invalid requests:
 
 - At least one measurement (`download_mbps`, `upload_mbps`, `ping_ms`, `jitter_ms`, `packet_loss`, `connectivity_score`) is required. Any unavailable measurement may be `null`.
 - Speeds, ping, and jitter must not be negative. `packet_loss` and `connectivity_score` must be between 0 and 100.
 - `NaN`, `Infinity`, and boolean values are rejected.
-- `timestamp` must be an ISO 8601 date-time. If it is omitted, the server time is used.
+- `timestamp` must be an ISO 8601 date-time. If it is omitted, the current server time is used.
+
+**Timestamps:** records are stored in one canonical UTC form, the format of JavaScript's `toISOString()` (for example `2026-11-02T04:30:00.000Z`). A timestamp with an offset such as `+05:30` is converted to the same instant in UTC. A timestamp without `Z` or an offset is read as the server's local time, which is how older versions of the backend stored records. `GET /api/network-history` returns timestamps in the same UTC form, filters `range`, `start_date` and `end_date` by UTC instant (dates are UTC calendar days), and orders records by UTC instant, then by `id`. Existing records are never rewritten; a stored value that is not a valid date-time is still returned as stored, after all other records, but is left out of time filters and AI training data. The logic lives in `backend/timestamps.py`.
 - `latitude` (-90 to 90) and `longitude` (-180 to 180) must be provided together.
 - `network_type` is limited to 50 characters.
 

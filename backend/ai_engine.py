@@ -21,6 +21,11 @@ import math
 import torch
 import torch.nn as nn
 
+if __package__:
+    from .timestamps import canonical_sort_key, to_canonical_utc
+else:  # Imported directly from backend/ (as main.py does).
+    from timestamps import canonical_sort_key, to_canonical_utc
+
 
 # ============================================================
 # PATHS
@@ -77,6 +82,7 @@ def load_network_data():
         rows = connection.execute(
             """
             SELECT
+                id,
                 timestamp,
                 download_mbps,
                 upload_mbps,
@@ -85,13 +91,26 @@ def load_network_data():
                 packet_loss,
                 connectivity_score
             FROM network_tests
-            ORDER BY timestamp ASC
             """
         ).fetchall()
+
+        # Order by real UTC instant, then id (issue #39). Stored values
+        # may use different formats, so text order is not chronological.
+        rows = sorted(
+            rows,
+            key=lambda row: canonical_sort_key(row["timestamp"], row["id"]),
+        )
 
         data = []
 
         for row in rows:
+
+            timestamp = to_canonical_utc(row["timestamp"])
+
+            # A record that cannot be placed in time cannot be used in a
+            # chronological sequence.
+            if timestamp is None:
+                continue
 
             values = []
 
@@ -120,7 +139,7 @@ def load_network_data():
             if valid:
                 data.append(
                     {
-                        "timestamp": row["timestamp"],
+                        "timestamp": timestamp,
                         "values": values,
                     }
                 )

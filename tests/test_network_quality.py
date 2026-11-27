@@ -160,3 +160,37 @@ def test_endpoint_returns_503_when_ping_cannot_run(client, monkeypatch):
 
     assert response.status_code == 503
     assert "Operation not permitted" in response.json()["detail"]
+
+
+def test_protocol_endpoint_is_independent_of_ping(client, monkeypatch):
+    expected = {
+        "connected": True,
+        "ipv4": {"status": "available", "reason": None},
+        "ipv6": {"status": "unavailable", "reason": "timeout"},
+    }
+    monkeypatch.setattr(main, "detect_network_protocols", lambda: expected)
+
+    response = client.get("/api/network-protocols")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_network_quality_response_keeps_legacy_fields(client, monkeypatch):
+    fake_ping(monkeypatch, stdout=LINUX_OUTPUT)
+
+    response = client.get("/api/network-quality")
+    data = response.json()
+
+    assert response.status_code == 200
+    assert {
+        "target",
+        "packets_sent",
+        "packets_received",
+        "packet_loss",
+        "ping_ms",
+        "jitter_ms",
+        "status",
+    }.issubset(data)
+
+

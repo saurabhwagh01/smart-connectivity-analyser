@@ -24,11 +24,18 @@ from backend.diagnostic_profiles import (
     get_profile,
     list_profiles,
 )
+from backend.timestamps import (
+    current_utc_timestamp,
+    to_canonical_utc,
+    utc_day_start,
+)
 from pathlib import Path
+from backend.protocol_diagnostics import detect_network_protocols
 
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 import json
+import logging
 import math
 import sys
 
@@ -38,7 +45,7 @@ import subprocess
 import re
 
 import statistics
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 # ============================================================
 # AI MODEL IMPORTS
@@ -298,9 +305,40 @@ def get_connection():
 
     connection.row_factory = sqlite3.Row
 
-
+    # canonical_utc(timestamp) lets queries filter and sort stored values,
+    # including legacy formats, by their real UTC instant (issue #39).
+    connection.create_function(
+        "canonical_utc", 1, to_canonical_utc, deterministic=True
+    )
 
     return connection
+
+
+logger = logging.getLogger(__name__)
+
+HISTORY_READ_ERROR = "Could not load network history. Please try again later."
+HISTORY_SAVE_ERROR = "Could not save the network test. Please try again later."
+HISTORY_DELETE_ERROR = "Could not delete network history. Please try again later."
+
+
+@contextmanager
+def history_database(error_message):
+    """Open a history database connection and always close it.
+
+    SQLite errors are logged with full details on the server and returned to
+    the client as a 500 response with a fixed, user-friendly message, so
+    internal error text and file paths are not exposed.
+    """
+    connection = None
+    try:
+        connection = get_connection()
+        yield connection
+    except sqlite3.Error:
+        logger.exception("Network history database error: %s", error_message)
+        raise HTTPException(status_code=500, detail=error_message)
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 
@@ -477,16 +515,16 @@ class NetworkTest(BaseModel):
         if value is None or not value.strip():
             return None
 
-        try:
-            # Python < 3.11 does not accept a trailing "Z".
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
+        # Store one canonical UTC form (issue #39). Offsets are converted
+        # to the same instant in UTC; a timestamp without an offset is
+        # read as server local time, matching older stored records.
+        canonical = to_canonical_utc(value)
+        if canonical is None:
             raise ValueError(
                 "timestamp must be an ISO 8601 date-time string"
             )
 
-        # Keep the original string so stored values are unchanged.
-        return value
+        return canonical
 
 
     @model_validator(mode="after")
@@ -619,6 +657,12 @@ def health_ready():
 
 
 # ============================================================
+
+@app.get("/api/network-protocols")
+def network_protocols():
+    """Report independent IPv4/IPv6 connectivity without changing ping data."""
+    return detect_network_protocols()
+
 
 # SIMPLE PING
 
@@ -849,7 +893,7 @@ def save_network_test(data: NetworkTest):
 
         data.timestamp
 
-        or datetime.now().isoformat()
+        or current_utc_timestamp()
 
     )
 
@@ -857,109 +901,39 @@ def save_network_test(data: NetworkTest):
 
 
 
-    connection = get_connection()
-
-
-
-    cursor = connection.cursor()
-
-
-
-
-
-    cursor.execute(
-
-        """
-
-        INSERT INTO network_tests (
-
-            timestamp,
-
-            download_mbps,
-
-            upload_mbps,
-
-            ping_ms,
-
-            jitter_ms,
-
-            packet_loss,
-
-            network_type,
-
-            connectivity_score,
-
-            latitude,
-
-            longitude
-
+    with history_database(HISTORY_SAVE_ERROR) as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO network_tests (
+                timestamp,
+                download_mbps,
+                upload_mbps,
+                ping_ms,
+                jitter_ms,
+                packet_loss,
+                network_type,
+                connectivity_score,
+                latitude,
+                longitude
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                timestamp,
+                data.download_mbps,
+                data.upload_mbps,
+                data.ping_ms,
+                data.jitter_ms,
+                data.packet_loss,
+                data.network_type,
+                data.connectivity_score,
+                data.latitude,
+                data.longitude
+            )
         )
-
-
-
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-        """,
-
-
-
-        (
-
-            timestamp,
-
-
-
-            data.download_mbps,
-
-
-
-            data.upload_mbps,
-
-
-
-            data.ping_ms,
-
-
-
-            data.jitter_ms,
-
-
-
-            data.packet_loss,
-
-
-
-            data.network_type,
-
-
-
-            data.connectivity_score,
-
-
-
-            data.latitude,
-
-
-
-            data.longitude
-
-        )
-
-    )
-
-
-
-
-
-    connection.commit()
-
-
-
-    test_id = cursor.lastrowid
-
-
-
-    connection.close()
+        connection.commit()
+        test_id = cursor.lastrowid
 
 
 
@@ -1003,6 +977,24 @@ HISTORY_RANGE_WINDOWS = {
     "weekly": timedelta(days=30),
     "monthly": timedelta(days=365),
 }
+
+# Chronological order by UTC instant; id breaks ties between identical
+# instants. Records whose timestamp cannot be parsed come last.
+HISTORY_ORDER_BY = (
+    " ORDER BY canonical_utc(timestamp) IS NULL ASC,"
+    " canonical_utc(timestamp) ASC, id ASC"
+)
+
+
+def history_record(row):
+    """Return a history row with its timestamp in canonical UTC form.
+
+    The stored value is never changed. A legacy value that cannot be
+    parsed is returned as stored, so the record stays accessible.
+    """
+    record = dict(row)
+    record["timestamp"] = to_canonical_utc(record["timestamp"]) or record["timestamp"]
+    return record
 
 DEFAULT_NETWORK_HISTORY_PAGE_SIZE = 100
 MAX_NETWORK_HISTORY_PAGE_SIZE = 500
@@ -1056,40 +1048,39 @@ def get_network_history(
             detail="min_score must be less than or equal to max_score",
         )
 
-    try:
-        connection = get_connection()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to connect to database: {exc}",
-        )
-
-    try:
+    with history_database(HISTORY_READ_ERROR) as connection:
         cursor = connection.cursor()
 
         conditions = []
         parameters = []
+
+        # Stored timestamps are compared by their UTC instant, so records
+        # in different formats and offsets filter correctly (issue #39).
+        # Canonical UTC strings have a fixed width, so text comparison of
+        # canonical values is chronological. Values that cannot be parsed
+        # become NULL and are left out of time filters.
 
         # Preserve the existing time-range behaviour
         # whenever a custom date range is not supplied.
         if start_date is None and end_date is None:
             if range != "all":
                 duration = HISTORY_RANGE_WINDOWS[range]
-                since = datetime.now() - duration
-                conditions.append("timestamp >= ?")
-                parameters.append(since.isoformat())
+                since = datetime.now(timezone.utc) - duration
+                conditions.append("canonical_utc(timestamp) >= ?")
+                parameters.append(to_canonical_utc(since.isoformat()))
 
         else:
+            # Calendar dates are UTC days.
             if start_date is not None:
-                conditions.append("timestamp >= ?")
-                parameters.append(start_date.isoformat())
+                conditions.append("canonical_utc(timestamp) >= ?")
+                parameters.append(utc_day_start(start_date))
 
             if end_date is not None:
                 # Exclusive upper boundary includes the entire end date.
                 end_exclusive = end_date + timedelta(days=1)
 
-                conditions.append("timestamp < ?")
-                parameters.append(end_exclusive.isoformat())
+                conditions.append("canonical_utc(timestamp) < ?")
+                parameters.append(utc_day_start(end_exclusive))
 
         if min_score is not None:
             conditions.append("connectivity_score >= ?")
@@ -1135,12 +1126,11 @@ def get_network_history(
             )
             total = cursor.fetchone()[0]
 
-            # id is a stable tie-breaker for rows with identical timestamps.
             cursor.execute(
-                query + " ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?",
+                query + HISTORY_ORDER_BY + " LIMIT ? OFFSET ?",
                 parameters + [page_limit, page_offset],
             )
-            records = [dict(row) for row in cursor.fetchall()]
+            records = [history_record(row) for row in cursor.fetchall()]
             next_offset = page_offset + len(records)
             has_more = next_offset < total
 
@@ -1156,16 +1146,8 @@ def get_network_history(
             }
 
         # Keep the original list response for existing callers.
-        cursor.execute(query + " ORDER BY timestamp ASC, id ASC", parameters)
-        return [dict(row) for row in cursor.fetchall()]
-
-    except sqlite3.Error as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database query error: {exc}",
-        )
-    finally:
-        connection.close()
+        cursor.execute(query + HISTORY_ORDER_BY, parameters)
+        return [history_record(row) for row in cursor.fetchall()]
 
 
 
@@ -1208,12 +1190,12 @@ def ai_prediction():
     try:
         predicted_score = final_predictor.predict()
 
-        if predicted_score >= 75:
+        if predicted_score >= 80:
             quality = "Excellent"
-        elif predicted_score >= 50:
+        elif predicted_score >= 60:
             quality = "Good"
-        elif predicted_score >= 25:
-            quality = "Average"
+        elif predicted_score >= 40:
+            quality = "Fair"
         else:
             quality = "Poor"
 
@@ -1235,7 +1217,6 @@ def ai_prediction():
             status_code=500,
             detail=f"Prediction failed: {error}",
         )
-
 
 # ============================================================
 # AI ANOMALY
@@ -1360,27 +1341,9 @@ def delete_network_history():
 
 
 
-    connection = get_connection()
-
-
-
-    cursor = connection.cursor()
-
-
-
-    cursor.execute(
-
-        "DELETE FROM network_tests"
-
-    )
-
-
-
-    connection.commit()
-
-
-
-    connection.close()
+    with history_database(HISTORY_DELETE_ERROR) as connection:
+        connection.execute("DELETE FROM network_tests")
+        connection.commit()
 
 
 
