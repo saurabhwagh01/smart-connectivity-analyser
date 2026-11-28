@@ -19,6 +19,8 @@ let activeDiagnosticEventSource = null;
 let activeDiagnosticStreamAbort = null;
 const activeDiagnosticAbortControllers = new Set();
 let activeDiagnosticCancelled = false;
+let activeDiagnosticCancellationPromise = null;
+let activeDiagnosticCancelReject = null;
 let diagnosticProgressState = { stages: {} };
 let networkChart = null;
 let forecastChart = null;
@@ -1695,7 +1697,10 @@ function cancelRunningProgressStages() {
 async function runTrackedDiagnosticStage(stage, run, evaluateStatus) {
     updateDiagnosticProgress(stage, "started");
     try {
-        const result = await run();
+        const result = await Promise.race([
+            Promise.resolve().then(run),
+            activeDiagnosticCancellationPromise
+        ]);
         if (activeDiagnosticCancelled) {
             updateDiagnosticProgress(stage, "cancelled");
             return result;
@@ -1717,6 +1722,7 @@ async function runTrackedDiagnosticStage(stage, run, evaluateStatus) {
 function cancelNetworkTest() {
     if (!testInProgress) return;
     activeDiagnosticCancelled = true;
+    activeDiagnosticCancelReject?.(new Error("Diagnostic cancelled."));
 
     if (activeDiagnosticStreamAbort) activeDiagnosticStreamAbort();
     if (activeDiagnosticEventSource) {
@@ -1770,6 +1776,9 @@ async function startNetworkTest() {
 
     testInProgress = true;
     activeDiagnosticCancelled = false;
+    activeDiagnosticCancellationPromise = new Promise((_, reject) => {
+        activeDiagnosticCancelReject = reject;
+    });
     beginDiagnosticProgress();
     metricsRestoredFromHistory = false;
     offlineClearedMetrics = false;
@@ -1960,6 +1969,8 @@ async function startNetworkTest() {
             activeDiagnosticEventSource = null;
         }
         activeDiagnosticStreamAbort = null;
+        activeDiagnosticCancellationPromise = null;
+        activeDiagnosticCancelReject = null;
         testInProgress = false;
 
         setStartButtonBusy(button, false);
@@ -2558,6 +2569,9 @@ async function runCloudflareBandwidthTest() {
         const module = await import(
             "https://cdn.skypack.dev/@cloudflare/speedtest"
         );
+        if (activeDiagnosticCancelled) {
+            return { download: null, upload: null };
+        }
 
         const SpeedTest = module.default;
 
