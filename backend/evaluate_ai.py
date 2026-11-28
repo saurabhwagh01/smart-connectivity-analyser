@@ -23,6 +23,7 @@ from ai_engine import (
     ConnectivityPredictor,
     TransformerAutoencoder,
 )
+from anomaly_calibration import compare_strategies, error_statistics
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "network_history.db"
@@ -502,7 +503,14 @@ def main():
         "test_records_above_threshold":
             anomaly_count,
         "test_anomaly_rate_percent":
-            round(anomaly_rate, 2)
+            round(anomaly_rate, 2),
+        # Thresholds calibrated on the unseen holdout errors, for
+        # comparison with the training-error percentile above (issue #40).
+        # backend/calibrate_anomaly.py produces the served calibration.
+        "holdout_error_statistics":
+            error_statistics(test_errors),
+        "holdout_threshold_comparison":
+            compare_strategies(test_errors),
     }
 
     print()

@@ -283,7 +283,28 @@ The application includes a HistGradientBoosting-based prediction component that 
 
 The application includes a Transformer Autoencoder that reconstructs network measurements and calculates a reconstruction error. The error is compared with a configured threshold to flag potentially unusual records.
 
-The detector has not yet been fully validated against labelled normal and anomalous examples. Threshold calibration and reproducible evaluation remain important areas for improvement.
+The detector has not yet been fully validated against labelled normal and anomalous examples.
+
+#### Threshold calibration
+
+`python backend/calibrate_anomaly.py` calibrates the threshold on data the model has not seen:
+
+1. Complete records are kept in chronological (UTC) order. The earliest 80% train the autoencoder and its scaler. The latest 20% are held out for validation, so no future record is used for training.
+2. Reconstruction errors are calculated on the held-out validation records.
+3. The threshold is computed from those validation errors with a configurable strategy:
+   - `percentile` (default, `--q 95`): the q-th percentile of validation errors. It makes no assumption about how errors are distributed, and by construction about (100 − q)% of normal validation records lie above it.
+   - `mean_std` (`--k 2`): mean + k·std, the previous method. It is only well founded for roughly Gaussian errors, and reconstruction errors are non-negative and right-skewed.
+   - `mad` (`--k 3`): median + k·1.4826·MAD, a robust version of `mean_std` that a few outliers hardly move.
+4. A report (`backend/anomaly_calibration_report.json`) records:
+   - training and validation counts and periods;
+   - error distributions;
+   - the selected threshold and how many records exceed it;
+   - a comparison of the strategies, including their stability across chronological validation folds;
+   - limitations.
+   
+   With `--labels labels.json` (timestamps mapped to `true`/`false`), it also reports precision, recall, F1, false positives and false negatives. Without labels, these metrics are not calculated.
+
+By default the script only writes the report. `--save` replaces the served model, scaler and `backend/models/anomaly_calibration.json` together. The calibration stores the SHA-256 of the model file and the scaler it was computed with. The backend uses the calibrated threshold only when both still match. Otherwise it falls back to the previous in-sample `mean + 2·std` threshold. `/api/ai/status` and `/api/ai/anomaly` report which one is in use (`threshold_source`, `threshold_method`).
 
 ## 🧪 Testing and Verification
 

@@ -65,6 +65,7 @@ from anomaly_explanation import build_anomaly_explanation
 
 try:
     import torch
+    from anomaly_calibration import load_calibration
     from ai_engine import (
         FEATURES,
         SEQUENCE_LENGTH,
@@ -213,11 +214,34 @@ AI_MODEL_DIR = BASE_DIR / "backend" / "models"
 AI_PREDICTION_MODEL_PATH = AI_MODEL_DIR / "connectivity_predictor.pt"
 AI_ANOMALY_MODEL_PATH = AI_MODEL_DIR / "anomaly_autoencoder.pt"
 AI_SCALER_PATH = AI_MODEL_DIR / "scaler.json"
+AI_CALIBRATION_PATH = AI_MODEL_DIR / "anomaly_calibration.json"
+
+LEGACY_THRESHOLD_METHOD = "mean_std(k=2) on training records"
 
 ai_prediction_model = None
 ai_anomaly_model = None
 ai_scaler = None
 ai_anomaly_threshold = None
+# How the served threshold was obtained (issue #40).
+ai_anomaly_threshold_info = {
+    "source": None,
+    "method": None,
+    "calibration": None,
+    "calibration_message": None,
+}
+
+
+def legacy_training_threshold(errors):
+    """Pre-calibration threshold: mean + 2 std of in-sample errors."""
+
+    if not errors:
+        return 0.05
+    mean_error = sum(errors) / len(errors)
+    variance = sum(
+        (value - mean_error) ** 2
+        for value in errors
+    ) / len(errors)
+    return mean_error + 2.0 * math.sqrt(variance)
 
 
 def load_ai_models():
@@ -225,6 +249,7 @@ def load_ai_models():
     global ai_anomaly_model
     global ai_scaler
     global ai_anomaly_threshold
+    global ai_anomaly_threshold_info
 
     if torch is None:
         return False, f"PyTorch/AI import failed: {AI_IMPORT_ERROR}"
@@ -252,8 +277,34 @@ def load_ai_models():
         )
         ai_anomaly_model.eval()
 
-        # Establish an anomaly threshold from reconstruction errors
-        # on the same real measurements used during training.
+        # Prefer the validation-calibrated threshold, but only when it
+        # was computed for exactly this model file and scaler.
+        calibration, reason = load_calibration(
+            AI_CALIBRATION_PATH,
+            AI_ANOMALY_MODEL_PATH,
+            ai_scaler,
+            FEATURES,
+        )
+        if calibration is not None:
+            ai_anomaly_threshold = calibration["threshold"]
+            ai_anomaly_threshold_info = {
+                "source": "validation_calibration",
+                "method": calibration.get("method"),
+                "calibration": {
+                    "validation_records": calibration.get("validation_records"),
+                    "training_records": calibration.get("training_records"),
+                    "validation_period": calibration.get("validation_period"),
+                    "created_at": calibration.get("created_at"),
+                },
+                "calibration_message": None,
+            }
+            return True, "AI anomaly model and final prediction model loaded successfully."
+
+        if AI_CALIBRATION_PATH.exists():
+            logger.warning("Ignoring anomaly calibration: %s", reason)
+
+        # Legacy fallback: reconstruction errors on the stored records,
+        # which may include the records the model was trained on.
         data = load_network_data()
         errors = []
 
@@ -272,17 +323,13 @@ def load_ai_models():
                 ).item()
                 errors.append(error_value)
 
-        if errors:
-            mean_error = sum(errors) / len(errors)
-            variance = sum(
-                (value - mean_error) ** 2
-                for value in errors
-            ) / len(errors)
-            ai_anomaly_threshold = (
-                mean_error + 2.0 * math.sqrt(variance)
-            )
-        else:
-            ai_anomaly_threshold = 0.05
+        ai_anomaly_threshold = legacy_training_threshold(errors)
+        ai_anomaly_threshold_info = {
+            "source": "legacy_training_errors" if errors else "default",
+            "method": LEGACY_THRESHOLD_METHOD if errors else "fixed 0.05",
+            "calibration": None,
+            "calibration_message": reason,
+        }
 
         return True, "AI anomaly model and final prediction model loaded successfully."
 
@@ -291,6 +338,12 @@ def load_ai_models():
         ai_anomaly_model = None
         ai_scaler = None
         ai_anomaly_threshold = None
+        ai_anomaly_threshold_info = {
+            "source": None,
+            "method": None,
+            "calibration": None,
+            "calibration_message": None,
+        }
         return False, f"AI model loading failed: {error}"
 
 
@@ -1179,6 +1232,17 @@ def ai_status():
         "anomaly_model": {
             "name": "Transformer Autoencoder",
             "loaded": ai_anomaly_model is not None,
+            "threshold": (
+                None
+                if ai_anomaly_threshold is None
+                else round(float(ai_anomaly_threshold), 6)
+            ),
+            "threshold_source": ai_anomaly_threshold_info.get("source"),
+            "threshold_method": ai_anomaly_threshold_info.get("method"),
+            "calibration": ai_anomaly_threshold_info.get("calibration"),
+            "calibration_message": ai_anomaly_threshold_info.get(
+                "calibration_message"
+            ),
         },
         "records_available": len(data),
         "sequence_length": SEQUENCE_LENGTH,
@@ -1300,6 +1364,8 @@ def ai_anomaly():
                 6,
             ),
             "threshold": round(threshold, 6),
+            "threshold_source": ai_anomaly_threshold_info.get("source"),
+            "threshold_method": ai_anomaly_threshold_info.get("method"),
             "status": (
                 "Anomaly detected"
                 if is_anomaly

@@ -17,13 +17,16 @@ from pathlib import Path
 import sqlite3
 import json
 import math
+import os
 
 import torch
 import torch.nn as nn
 
 if __package__:
+    from . import anomaly_calibration as calibration
     from .timestamps import canonical_sort_key, to_canonical_utc
 else:  # Imported directly from backend/ (as main.py does).
+    import anomaly_calibration as calibration
     from timestamps import canonical_sort_key, to_canonical_utc
 
 
@@ -41,6 +44,8 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 PREDICTION_MODEL_PATH = MODEL_DIR / "connectivity_predictor.pt"
 ANOMALY_MODEL_PATH = MODEL_DIR / "anomaly_autoencoder.pt"
 SCALER_PATH = MODEL_DIR / "scaler.json"
+CALIBRATION_PATH = MODEL_DIR / "anomaly_calibration.json"
+CALIBRATION_REPORT_PATH = BASE_DIR / "backend" / "anomaly_calibration_report.json"
 
 
 # ============================================================
@@ -617,37 +622,24 @@ def train_prediction_model(
 
 
 # ============================================================
-# TRAIN ANOMALY MODEL
+# TRAIN AND CALIBRATE ANOMALY MODEL (issue #40)
 # ============================================================
 
-def train_anomaly_model(
+def train_autoencoder(
+    records,
+    scaler,
     epochs=100,
-    learning_rate=0.001
+    learning_rate=0.001,
+    seed=42,
 ):
+    """Train a Transformer Autoencoder on ``records`` only."""
 
-    data = load_network_data()
-
-    if len(data) < MIN_TRAINING_RECORDS:
-
-        return {
-            "success": False,
-            "message": (
-                f"Insufficient training data. "
-                f"{len(data)}/{MIN_TRAINING_RECORDS} "
-                f"records available."
-            ),
-            "records": len(data),
-            "minimum_required": MIN_TRAINING_RECORDS,
-        }
-
-    scaler = calculate_scaler(data)
+    if seed is not None:
+        torch.manual_seed(seed)
 
     normalized = [
-        normalize_values(
-            item["values"],
-            scaler
-        )
-        for item in data
+        normalize_values(item["values"], scaler)
+        for item in records
     ]
 
     inputs = torch.tensor(
@@ -672,45 +664,266 @@ def train_anomaly_model(
 
         optimizer.zero_grad()
 
-        reconstructed = model(
-            inputs
-        )
+        reconstructed = model(inputs)
 
         target = inputs[:, -1, :]
 
-        loss = loss_function(
-            reconstructed,
-            target
-        )
+        loss = loss_function(reconstructed, target)
 
         loss.backward()
 
         optimizer.step()
 
-        final_loss = float(
-            loss.item()
+        final_loss = float(loss.item())
+
+    model.eval()
+
+    return model, final_loss
+
+
+def anomaly_reconstruction_errors(model, scaler, records):
+    """Per-record mean squared reconstruction error, as the API computes it."""
+
+    if not records:
+        return []
+
+    normalized = [
+        normalize_values(item["values"], scaler)
+        for item in records
+    ]
+
+    inputs = torch.tensor(
+        normalized,
+        dtype=torch.float32
+    ).unsqueeze(1)
+
+    model.eval()
+
+    with torch.no_grad():
+        reconstructed = model(inputs)
+
+    target = inputs[:, -1, :]
+
+    errors = torch.mean((reconstructed - target) ** 2, dim=1)
+
+    return [float(error) for error in errors]
+
+
+def _period(records):
+    if not records:
+        return None
+    return {
+        "start": records[0]["timestamp"],
+        "end": records[-1]["timestamp"],
+    }
+
+
+def calibrate_anomaly_model(
+    config=None,
+    data=None,
+    labels=None,
+    save=False,
+    model_path=None,
+    scaler_path=None,
+    calibration_path=None,
+    strategies=calibration.DEFAULT_COMPARISON,
+):
+    """Train on the earliest records and calibrate on the held-out latest.
+
+    ``labels`` optionally maps canonical UTC timestamps to True (anomaly)
+    or False (normal). Labelled metrics are reported only for labelled
+    validation records and are never estimated without labels.
+
+    With ``save=True`` the model, its training-only scaler and the
+    calibration are written together, so the served threshold always
+    belongs to the served model and scaler.
+    """
+
+    config = config or calibration.CalibrationConfig()
+    model_path = Path(model_path or ANOMALY_MODEL_PATH)
+    scaler_path = Path(scaler_path or SCALER_PATH)
+    calibration_path = Path(calibration_path or CALIBRATION_PATH)
+
+    if data is None:
+        data = load_network_data()
+
+    # Reject an unknown strategy or bad parameters before training.
+    calibration.calculate_threshold([0.0, 1.0], config.strategy, **config.params)
+
+    try:
+        training, validation = calibration.chronological_split(
+            data,
+            config.validation_ratio,
+            config.min_training_records,
+            config.min_validation_records,
+        )
+    except calibration.InsufficientDataError as error:
+        return {
+            "success": False,
+            "message": str(error),
+            "records": len(data),
+        }
+
+    # The scaler is fitted on training records only: validation stays unseen.
+    scaler = calculate_scaler(training)
+
+    model, final_loss = train_autoencoder(
+        training,
+        scaler,
+        epochs=config.epochs,
+        learning_rate=config.learning_rate,
+        seed=config.seed,
+    )
+
+    training_errors = anomaly_reconstruction_errors(model, scaler, training)
+    validation_errors = anomaly_reconstruction_errors(model, scaler, validation)
+
+    threshold = calibration.calculate_threshold(
+        validation_errors,
+        config.strategy,
+        **config.params,
+    )
+
+    validation_labels = None
+    if labels:
+        validation_labels = [
+            labels.get(item["timestamp"]) for item in validation
+        ]
+        if all(label is None for label in validation_labels):
+            validation_labels = None
+
+    validation_statistics = calibration.error_statistics(validation_errors)
+    validation_exceedance = calibration.exceedance(validation_errors, threshold)
+
+    limitations = [
+        "The threshold is calibrated on the most recent records, which are "
+        "assumed to be mostly normal; anomalies in that period raise it.",
+        "A percentile threshold flags about (100 - q)% of validation records "
+        "by construction; that share is not a detection rate.",
+        f"Only {len(validation)} validation records were available; "
+        "thresholds from small samples are noisy (see stability).",
+    ]
+    if validation_labels is None:
+        limitations.append(
+            "No labelled anomalies were provided, so precision, recall and "
+            "F1 were not calculated."
         )
 
-    torch.save(
-        model.state_dict(),
-        ANOMALY_MODEL_PATH
+    report = {
+        "success": True,
+        "model": calibration.MODEL_NAME,
+        "evaluation_type": "Chronological train/validation split",
+        "config": config.to_dict(),
+        "total_complete_records": len(data),
+        "training_records": len(training),
+        "validation_records": len(validation),
+        "training_period": _period(training),
+        "validation_period": _period(validation),
+        "final_training_loss": final_loss,
+        "training_error_statistics": calibration.error_statistics(
+            training_errors
+        ),
+        "validation_error_statistics": validation_statistics,
+        "selected": {
+            "strategy": config.strategy,
+            "params": dict(config.params),
+            "method": calibration.describe_strategy(
+                config.strategy, config.params
+            ),
+            "threshold": threshold,
+            "validation": validation_exceedance,
+            "training": calibration.exceedance(training_errors, threshold),
+            "labelled_metrics": calibration.labelled_metrics(
+                validation_errors, validation_labels, threshold
+            ),
+        },
+        "comparison": calibration.compare_strategies(
+            validation_errors,
+            strategies,
+            validation_labels,
+        ),
+        "limitations": limitations,
+        "saved": False,
+    }
+
+    if save:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_model = model_path.with_suffix(model_path.suffix + ".tmp")
+        torch.save(model.state_dict(), temporary_model)
+        os.replace(temporary_model, model_path)
+        calibration.write_json_atomic(scaler_path, scaler)
+        calibration.write_json_atomic(
+            calibration_path,
+            calibration.build_calibration(
+                threshold=threshold,
+                config=config,
+                model_path=model_path,
+                scaler=scaler,
+                features=FEATURES,
+                training_records=len(training),
+                validation_records=len(validation),
+                validation_statistics=validation_statistics,
+                validation_exceedance=validation_exceedance,
+                training_period=report["training_period"],
+                validation_period=report["validation_period"],
+            ),
+        )
+        report["saved"] = True
+        report["artifacts"] = {
+            "model": str(model_path),
+            "scaler": str(scaler_path),
+            "calibration": str(calibration_path),
+        }
+
+    return report
+
+
+def train_anomaly_model(
+    epochs=100,
+    learning_rate=0.001
+):
+    """Train, calibrate and save the anomaly model with its threshold."""
+
+    data = load_network_data()
+
+    if len(data) < MIN_TRAINING_RECORDS:
+
+        return {
+            "success": False,
+            "message": (
+                f"Insufficient training data. "
+                f"{len(data)}/{MIN_TRAINING_RECORDS} "
+                f"records available."
+            ),
+            "records": len(data),
+            "minimum_required": MIN_TRAINING_RECORDS,
+        }
+
+    report = calibrate_anomaly_model(
+        calibration.CalibrationConfig(
+            epochs=epochs,
+            learning_rate=learning_rate,
+        ),
+        data=data,
+        save=True,
     )
 
-    save_scaler(
-        scaler
-    )
+    if not report["success"]:
+        return report
 
     return {
         "success": True,
         "model": "Transformer Autoencoder",
         "records": len(data),
+        "training_records": report["training_records"],
+        "validation_records": report["validation_records"],
         "epochs": epochs,
-        "final_loss": final_loss,
-        "model_path": str(
-            ANOMALY_MODEL_PATH
-        ),
+        "final_loss": report["final_training_loss"],
+        "threshold": report["selected"]["threshold"],
+        "threshold_method": report["selected"]["method"],
+        "model_path": str(ANOMALY_MODEL_PATH),
+        "calibration_path": str(CALIBRATION_PATH),
     }
-
 
 # ============================================================
 # COMPLETE TRAINING
