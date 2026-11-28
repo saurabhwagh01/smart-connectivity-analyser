@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 
 from fastapi.encoders import jsonable_encoder
 
@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 
 from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import (
@@ -36,6 +36,7 @@ from backend.timestamps import (
 from pathlib import Path
 from backend.protocol_diagnostics import detect_network_protocols
 
+import asyncio
 import sqlite3
 from contextlib import closing, contextmanager
 import json
@@ -767,44 +768,14 @@ def build_ping_command(target, packet_count, timeout_seconds, system):
     ]
 
 
-def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
-    """Run the ping measurement. Raises HTTPException if ping cannot run."""
-    target = "1.1.1.1"
-    timeout_seconds = 2
-
-    command = build_ping_command(
-        target, packet_count, timeout_seconds, platform.system()
-    )
-
-    # 10 packets keeps the original 30 s limit; longer runs scale up.
-    subprocess_timeout = max(30, packet_count * 2 + 10)
-
-    try:
-        process = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=subprocess_timeout,
-        )
-        output = process.stdout
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=503,
-            detail="The ping command is not available on this server.",
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Ping measurement timed out.")
-    except Exception as error:
-        raise HTTPException(
-            status_code=500, detail=f"Ping measurement failed: {error}"
-        )
-
+def build_ping_result(target, packet_count, output, stderr=""):
+    """Convert the real ping command output into the existing API result shape."""
     ping_times, packet_loss = parse_ping_output(output)
 
     # No replies and no loss summary means ping failed to run, which is
     # not the same as a real 100% packet loss.
     if not ping_times and packet_loss is None:
-        reason = process.stderr.strip() or "ping produced no output"
+        reason = stderr.strip() or "ping produced no output"
         raise HTTPException(
             status_code=503, detail=f"Ping measurement failed: {reason}"
         )
@@ -859,9 +830,201 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
     }
 
 
+def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
+    """Run the synchronous, backwards-compatible ping measurement."""
+    target = "1.1.1.1"
+    timeout_seconds = 2
+    command = build_ping_command(
+        target, packet_count, timeout_seconds, platform.system()
+    )
+
+    # This bounded timeout also protects legacy/non-streaming callers.
+    subprocess_timeout = max(30, packet_count * 2 + 10)
+    try:
+        process = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=subprocess_timeout,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail="The ping command is not available on this server.",
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Ping measurement timed out.")
+    except Exception as error:
+        raise HTTPException(
+            status_code=500, detail=f"Ping measurement failed: {error}"
+        )
+
+    return build_ping_result(
+        target, packet_count, process.stdout, process.stderr
+    )
+
+
+async def _stop_ping_process(process):
+    """Terminate and reap a child ping process when a stream is cancelled."""
+    if process is None or process.returncode is not None:
+        return
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    await process.wait()
+
+
+async def measure_ping_async(packet_count=DEFAULT_PACKET_COUNT):
+    """Run ping asynchronously so a disconnected SSE client can cancel it."""
+    target = "1.1.1.1"
+    timeout_seconds = 2
+    command = build_ping_command(
+        target, packet_count, timeout_seconds, platform.system()
+    )
+    subprocess_timeout = max(30, packet_count * 2 + 10)
+    process = None
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=subprocess_timeout,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail="The ping command is not available on this server.",
+        )
+    except asyncio.TimeoutError:
+        await _stop_ping_process(process)
+        raise HTTPException(status_code=504, detail="Ping measurement timed out.")
+    except asyncio.CancelledError:
+        await _stop_ping_process(process)
+        raise
+    except Exception as error:
+        await _stop_ping_process(process)
+        raise HTTPException(
+            status_code=500, detail="Ping measurement failed."
+        ) from error
+
+    return build_ping_result(
+        target,
+        packet_count,
+        stdout.decode("utf-8", errors="replace"),
+        stderr.decode("utf-8", errors="replace"),
+    )
+
+
+def encode_sse_event(event, payload):
+    """Encode one named server-sent event using the browser EventSource format."""
+    return (
+        f"event: {event}\\n"
+        f"data: {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}\\n\\n"
+    )
+
+
+async def diagnostic_progress_events(request, profile_id=None):
+    """Yield truthful progress for the backend ping and cancel it on disconnect."""
+    yield "retry: 0\\n\\n"
+    profile = get_profile(profile_id) if profile_id else None
+    packet_count = profile.packet_count if profile else DEFAULT_PACKET_COUNT
+
+    yield encode_sse_event("progress", {
+        "stage": "ping",
+        "status": "started",
+        "completed": [],
+    })
+
+    task = asyncio.create_task(measure_ping_async(packet_count))
+    last_heartbeat = asyncio.get_running_loop().time()
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=0.25)
+            if await request.is_disconnected():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                return
+
+            now = asyncio.get_running_loop().time()
+            if now - last_heartbeat >= 5:
+                yield ": keep-alive\\n\\n"
+                last_heartbeat = now
+
+        ping_result = task.result()
+        result = build_profile_result(profile, ping_result) if profile else ping_result
+        yield encode_sse_event("progress", {
+            "stage": "ping",
+            "status": "completed",
+            "completed": ["ping"],
+        })
+        yield encode_sse_event("result", result)
+        yield encode_sse_event("done", {"status": "completed"})
+    except HTTPException as error:
+        yield encode_sse_event("progress", {
+            "stage": "ping",
+            "status": "failed",
+            "completed": [],
+        })
+        yield encode_sse_event("error", {
+            "status_code": error.status_code,
+            "detail": error.detail,
+        })
+        yield encode_sse_event("done", {"status": "failed"})
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        raise
+    except Exception:
+        logger.exception("Streaming network diagnostic failed")
+        yield encode_sse_event("progress", {
+            "stage": "ping",
+            "status": "failed",
+            "completed": [],
+        })
+        yield encode_sse_event("error", {
+            "status_code": 500,
+            "detail": "Network diagnostic failed.",
+        })
+        yield encode_sse_event("done", {"status": "failed"})
+
+
 @app.get("/api/diagnostic-profiles")
 def get_diagnostic_profiles():
     return {"default": None, "profiles": list_profiles()}
+
+
+@app.get("/api/network-quality/stream")
+def network_quality_stream(
+    request: Request,
+    profile: str | None = Query(default=None),
+):
+    if profile is not None:
+        try:
+            get_profile(profile)
+        except UnknownProfileError:
+            valid = [item["id"] for item in list_profiles()]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Unknown diagnostic profile '{profile}'.",
+                    "valid_profiles": valid,
+                },
+            )
+
+    return StreamingResponse(
+        diagnostic_progress_events(request, profile),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/network-quality")
