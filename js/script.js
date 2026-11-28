@@ -1703,7 +1703,10 @@ async function runTrackedDiagnosticStage(stage, run, evaluateStatus) {
         return result;
     } catch (error) {
         updateDiagnosticProgress(stage, activeDiagnosticCancelled ? "cancelled" : "failed");
-        throw error;
+        if (!activeDiagnosticCancelled) {
+            console.warn(`${stage} diagnostic failed:`, error.message);
+        }
+        return null;
     }
 }
 
@@ -2317,7 +2320,7 @@ function requestNetworkQualityWithProgress(
                     finish(new Error("The diagnostic stream returned an invalid result."));
                 }
             });
-            source.addEventListener("error", (event) => {
+            source.addEventListener("failure", (event) => {
                 if (typeof event.data !== "string") return; // Native EventSource transport error.
                 try {
                     const payload = JSON.parse(event.data);
