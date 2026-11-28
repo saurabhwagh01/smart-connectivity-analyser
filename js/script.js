@@ -8,13 +8,15 @@ const API_BASE =
         ? window.API_BASE
         : "http://127.0.0.1:8000/api";
 
-const $ = (id) => document.getElementById(id);
+const $ = (id) => typeof document === "undefined" ? null : document.getElementById(id);
 
 let applicationInitialized = false;
 let testInProgress = false;
 let speedTest = null;
 let speedTestTimeout = null;
 let networkChart = null;
+let forecastChart = null;
+let latestForecastData = null;
 let connectivityMap = null;
 let userMarker = null;
 let savedMarkers = [];
@@ -40,49 +42,46 @@ let currentMetrics = {
     score: 0
 };
 
+// ─── Metric Units (loaded from js/metrics.js) ──────────
+const _metrics =
+    typeof require === "function"
+        ? require("./metrics.js")
+        : {
+            METRIC_UNITS: globalThis.METRIC_UNITS,
+            isValidMetric: globalThis.isValidMetric,
+            safeNumber: globalThis.safeNumber,
+            firstValid: globalThis.firstValid,
+            isValidMetricNumber: globalThis.isValidMetricNumber,
+            formatNumber: globalThis.formatNumber,
+            formatMetric: globalThis.formatMetric,
+            formatNetworkMetric: globalThis.formatNetworkMetric
+        };
+
+var {
+    METRIC_UNITS,
+    isValidMetric,
+    safeNumber,
+    firstValid,
+    isValidMetricNumber,
+    formatNumber,
+    formatMetric,
+    formatNetworkMetric
+} = _metrics;
+
+const ANOMALY_METRIC_LABELS = Object.freeze({
+    download_mbps: "Download speed",
+    upload_mbps: "Upload speed",
+    ping_ms: "Ping",
+    jitter_ms: "Jitter",
+    packet_loss: "Packet loss"
+});
+
 // Snapshot of the last completed measurements, taken BEFORE any testing
 // state is applied. While a test runs, the dashboard keeps showing these
 // values; on failure they are restored (see restorePreviousMetrics).
 // This must be captured before currentMetrics is reset — snapshotting
 // after the reset would only preserve the null values (PR #66 review).
 let previousMetrics = null;
-
-// ─── Metric Units ─────────────────────────────────────
-const METRIC_UNITS = Object.freeze({
-    download: "Mbps",
-    download_mbps: "Mbps",
-    upload: "Mbps",
-    upload_mbps: "Mbps",
-    ping: "ms",
-    ping_ms: "ms",
-    jitter: "ms",
-    jitter_ms: "ms",
-    packetLoss: "%",
-    packet_loss: "%"
-});
-
-/* =========================================================
-   HELPERS
-   ========================================================= */
-
-function isValidMetric(value) {
-    return value !== null &&
-        value !== undefined &&
-        value !== "" &&
-        typeof value !== "boolean" &&
-        Number.isFinite(Number(value));
-}
-
-function safeNumber(value, fallback = null) {
-    return isValidMetric(value) ? Number(value) : fallback;
-}
-
-function firstValid(...values) {
-    for (const value of values) {
-        if (isValidMetric(value)) return Number(value);
-    }
-    return null;
-}
 
 function setText(id, value) {
     const element = $(id);
@@ -108,67 +107,11 @@ function showToast(message) {
 
 // ─── Format Metric ─────────────────────────────────────
 
-function formatMetric(value, unitOrDecimals = "", decimals = 1) {
-    if (!isValidMetricNumber(value)) {
-        return "Unavailable";
-    }
-
-    // Maintain compatibility with existing formatMetric(value, 2) calls.
-    let unit = "";
-
-    if (typeof unitOrDecimals === "number") {
-        decimals = unitOrDecimals;
-    } else {
-        unit = unitOrDecimals || "";
-    }
-
-    const formatted = Number(value).toFixed(decimals);
-
-    return unit ? `${formatted} ${unit}` : formatted;
-}
-
-// ─── Metric Validation & Formatting Helpers ────────────
-
-/*
-   The shared, unit-tested scoring function from
-   js/connectivity-score.js. index.html loads that module before
-   this file, so the browser uses the global it defines; the Node
-   tests require it directly here.
-*/
-
+// ─── Shared Connectivity Score (loaded from js/connectivity-score.js) ──
 const sharedCalculateConnectivityScore =
     typeof calculateConnectivityScore !== "undefined"
         ? calculateConnectivityScore
         : require("./connectivity-score.js").calculateConnectivityScore;
-
-function isValidMetricNumber(value) {
-    if (
-        value === null ||
-        value === undefined ||
-        value === "" ||
-        typeof value === "boolean" ||
-        typeof value === "object" ||
-        (typeof value === "string" && value.trim() === "")
-    ) {
-        return false;
-    }
-
-    return Number.isFinite(Number(value));
-}
-
-
-function formatNumber(value, decimals = 1) {
-    if (!isValidMetricNumber(value)) {
-        return "--";
-    }
-
-    return Number(value).toFixed(decimals);
-}
-function formatNetworkMetric(metricType, value, decimals = 1) {
-    const unit = METRIC_UNITS[metricType] || "";
-
-    return formatMetric(value, unit, decimals);
-}
 /**
  * Mark the Start Test button as busy without using the `disabled`
  * attribute. A disabled button loses keyboard focus, which drops a
@@ -220,6 +163,7 @@ async function initializeApplication() {
     wasDeviceOffline = isDeviceOffline();
 
     setupButtons();
+    await loadDiagnosticProfiles();
     setupNetworkListeners();
     detectNetworkType();
     applyConnectivityStatusIndicator();
@@ -234,6 +178,7 @@ async function initializeApplication() {
     updateApplicationReadiness();
     updateAIAnalysis();
     updateAISectionsFromBackend();
+    loadConnectivityForecast();
     updateNetworkRecommendation();
 
     startSessionTimer();
@@ -256,6 +201,11 @@ function setupButtons() {
     $("historyRange")?.addEventListener("change", (event) => {
         loadNetworkHistory(event.target.value);
     });
+
+    $("historyMetric")?.addEventListener("change", (event) => {
+        applyHistoryMetricFilter(event.target.value);
+    });
+
     // Apply history filters.
     $("applyHistoryFilters")?.addEventListener(
         "click",
@@ -282,6 +232,12 @@ function setupButtons() {
         "click",
         findBetterArea
     );
+
+    $("forecastMetric")?.addEventListener("change", (event) => {
+        if (latestForecastData) {
+            updateForecastChart(latestForecastData, event.target.value);
+        }
+    });
 }
 
 const STATUS_INDICATOR_CLASSES = Object.freeze([
@@ -296,25 +252,25 @@ const STATUS_INDICATOR_CLASSES = Object.freeze([
     "poor"
 ]);
 
-function getBrowserConnection() {
-    if (typeof navigator === "undefined") return null;
+// ─── Network Status & Type Detection (loaded from js/network-status.js) ──
+const _networkStatus =
+    typeof require === "function"
+        ? require("./network-status.js")
+        : {
+            getBrowserConnection: globalThis.getBrowserConnection,
+            resolveNetworkType: globalThis.resolveNetworkType,
+            isDeviceOffline: globalThis.isDeviceOffline,
+            resolveConnectivityIndicator: globalThis.resolveConnectivityIndicator,
+            resolveDashboardDisplayState: globalThis.resolveDashboardDisplayState
+        };
 
-    return (
-        navigator.connection ||
-        navigator.mozConnection ||
-        navigator.webkitConnection ||
-        null
-    );
-}
-
-function isDeviceOffline(
-    connection = getBrowserConnection(),
-    isOnline = typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
-        ? navigator.onLine
-        : true
-) {
-    return resolveNetworkType(connection, isOnline).type === "Offline";
-}
+var {
+    getBrowserConnection,
+    resolveNetworkType,
+    isDeviceOffline,
+    resolveConnectivityIndicator,
+    resolveDashboardDisplayState
+} = _networkStatus;
 
 function clearLiveMetrics() {
     currentMetrics.download = null;
@@ -366,98 +322,6 @@ function hasNewMeasurements() {
         currentMetrics.jitter !== null ||
         currentMetrics.packetLoss !== null
     );
-}
-
-function resolveConnectivityIndicator(
-    score,
-    { isOffline = false, isTesting = false } = {}
-) {
-    if (isOffline) {
-        return {
-            status: "Offline",
-            dotClass: "disconnected",
-            score: 0
-        };
-    }
-
-    const numericScore = Number.isFinite(Number(score))
-        ? Math.max(0, Number(score))
-        : 0;
-
-    if (isTesting) {
-        return {
-            status: "Testing",
-            dotClass: "testing",
-            score: numericScore
-        };
-    }
-
-    if (numericScore >= 80) {
-        return { status: "Excellent", dotClass: "excellent", score: numericScore };
-    }
-
-    if (numericScore >= 60) {
-        return { status: "Good", dotClass: "good", score: numericScore };
-    }
-
-    if (numericScore >= 40) {
-        return { status: "Fair", dotClass: "fair", score: numericScore };
-    }
-
-    if (numericScore > 0) {
-        return { status: "Poor", dotClass: "poor", score: numericScore };
-    }
-
-    return {
-        status: "Online",
-        dotClass: "connected",
-        score: 0
-    };
-}
-
-function resolveDashboardDisplayState(
-    metrics = {},
-    {
-        isOffline = false,
-        isTesting = false,
-        isHistoryRestored = false
-    } = {}
-) {
-    if (isOffline) {
-        return {
-            download: "Unavailable",
-            upload: "Unavailable",
-            ping: "Unavailable",
-            jitter: "Unavailable",
-            packetLoss: "Unavailable",
-            score: 0,
-            metricsSubtitle: "Offline — live measurements unavailable",
-            indicator: resolveConnectivityIndicator(0, {
-                isOffline: true,
-                isTesting
-            })
-        };
-    }
-
-    const score = Number.isFinite(Number(metrics.score))
-        ? Math.max(0, Number(metrics.score))
-        : sharedCalculateConnectivityScore(metrics);
-
-    return {
-        download: formatMetric(metrics.download),
-        upload: formatMetric(metrics.upload),
-        ping: formatMetric(metrics.ping),
-        jitter: formatMetric(metrics.jitter),
-        packetLoss: formatMetric(metrics.packetLoss),
-        score,
-        metricsSubtitle: isHistoryRestored
-            ? "Last recorded measurements (run a test for live metrics)"
-            : "Live performance measurements",
-        indicator: resolveConnectivityIndicator(score, {
-            isOffline: false,
-            isTesting
-        })
-    };
 }
 
 function applyConnectivityStatusIndicator(score = currentMetrics.score) {
@@ -556,6 +420,7 @@ function setupNetworkListeners() {
     window.addEventListener("resize", () => {
         connectivityMap?.invalidateSize();
         networkChart?.resize();
+        forecastChart?.resize();
     });
 
     setInterval(() => {
@@ -582,104 +447,7 @@ function updateNetworkStatus() {
  * @param {boolean} [isOnline=true] - Browser online status
  * @returns {{type: string, detail: string, isKnown: boolean, effectiveType: string|null}}
  */
-function resolveNetworkType(connection, isOnline = true) {
-    if (!isOnline) {
-        return {
-            type: "Offline",
-            detail: "No internet connection",
-            isKnown: true,
-            effectiveType: null
-        };
-    }
-
-    if (!connection || typeof connection !== "object") {
-        return {
-            type: "Unknown",
-            detail: "Network Information API not supported by browser",
-            isKnown: false,
-            effectiveType: null
-        };
-    }
-
-    const rawType = typeof connection.type === "string"
-        ? connection.type.toLowerCase().trim()
-        : "";
-
-    const rawEffectiveType = typeof connection.effectiveType === "string"
-        ? connection.effectiveType.toLowerCase().trim()
-        : null;
-
-    if (rawType === "none") {
-        return {
-            type: "Offline",
-            detail: "No active network connection",
-            isKnown: true,
-            effectiveType: null
-        };
-    }
-
-    if (rawType === "wifi" || rawType === "wlan") {
-        return {
-            type: "Wi-Fi",
-            detail: "Wi-Fi connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "cellular" || rawType === "mobile" || rawType.startsWith("cellular")) {
-        const speedContext = rawEffectiveType
-            ? `Cellular (~${rawEffectiveType.toUpperCase()} speed tier, generation unverified)`
-            : "Cellular connection (generation unverified)";
-
-        return {
-            type: "Mobile",
-            detail: speedContext,
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "ethernet") {
-        return {
-            type: "Ethernet",
-            detail: "Wired ethernet connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "bluetooth") {
-        return {
-            type: "Bluetooth",
-            detail: "Bluetooth tethering connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    if (rawType === "wimax") {
-        return {
-            type: "WiMAX",
-            detail: "WiMAX wireless connection",
-            isKnown: true,
-            effectiveType: rawEffectiveType
-        };
-    }
-
-    // When connection.type is missing, "other", "unknown", or unrecognized:
-    // Do NOT treat effectiveType (e.g. "3g" or "4g") as confirmed network type.
-    const speedTierNote = rawEffectiveType
-        ? `Estimated ~${rawEffectiveType.toUpperCase()} speed tier (medium unverified)`
-        : "Network type not reported by browser";
-
-    return {
-        type: "Unknown",
-        detail: speedTierNote,
-        isKnown: false,
-        effectiveType: rawEffectiveType
-    };
-}
+// resolveNetworkType is loaded from js/network-status.js
 
 function detectNetworkType() {
     const isOnline =
@@ -1130,6 +898,54 @@ function initializeChart() {
                     tension: 0.35,
                     spanGaps: true,
                     yAxisID: "speedAxis"
+                },
+
+                {
+                    label: "Upload Speed (Mbps)",
+                    data: [],
+                    borderColor: "#3b82f6",
+                    backgroundColor: "rgba(59, 130, 246, 0.10)",
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0.35,
+                    spanGaps: true,
+                    yAxisID: "speedAxis"
+                },
+
+                {
+                    label: "Ping (ms)",
+                    data: [],
+                    borderColor: "#f59e0b",
+                    backgroundColor: "rgba(245, 158, 11, 0.10)",
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0.35,
+                    spanGaps: true,
+                    yAxisID: "latencyAxis"
+                },
+
+                {
+                    label: "Jitter (ms)",
+                    data: [],
+                    borderColor: "#10b981",
+                    backgroundColor: "rgba(16, 185, 129, 0.10)",
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0.35,
+                    spanGaps: true,
+                    yAxisID: "latencyAxis"
+                },
+
+                {
+                    label: "Packet Loss (%)",
+                    data: [],
+                    borderColor: "#ef4444",
+                    backgroundColor: "rgba(239, 68, 68, 0.10)",
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0.35,
+                    spanGaps: true,
+                    yAxisID: "scoreAxis"
                 }
             ]
         },
@@ -1163,7 +979,7 @@ function initializeChart() {
 
                     title: {
                         display: true,
-                        text: "Connectivity Score"
+                        text: "Score / Loss (%)"
                     }
                 },
 
@@ -1174,7 +990,22 @@ function initializeChart() {
 
                     title: {
                         display: true,
-                        text: "Download Mbps"
+                        text: "Speed (Mbps)"
+                    },
+
+                    grid: {
+                        drawOnChartArea: false
+                    }
+                },
+
+                latencyAxis: {
+                    type: "linear",
+                    position: "right",
+                    beginAtZero: true,
+
+                    title: {
+                        display: false,
+                        text: "Latency (ms)"
                     },
 
                     grid: {
@@ -1186,6 +1017,31 @@ function initializeChart() {
     });
 
     console.log("Chart.js initialized.");
+}
+
+function applyHistoryMetricFilter(selectedMetric = "all") {
+    if (!networkChart) return;
+
+    const metricDatasetMap = {
+        score: [0],
+        download: [1],
+        upload: [2],
+        ping: [3],
+        jitter: [4],
+        packet_loss: [5]
+    };
+
+    const targetIndices = metricDatasetMap[selectedMetric];
+
+    networkChart.data.datasets.forEach((dataset, idx) => {
+        if (selectedMetric === "all") {
+            dataset.hidden = false;
+        } else {
+            dataset.hidden = !targetIndices?.includes(idx);
+        }
+    });
+
+    networkChart.update();
 }
 
 /* =========================================================
@@ -1612,7 +1468,24 @@ function updateHistoryChart(history = sessionTests, range = null) {
     networkChart.data.datasets[1].data =
         filtered.map((item) => item.download_mbps);
 
-    networkChart.update();
+    networkChart.data.datasets[2].data =
+        filtered.map((item) => item.upload_mbps);
+
+    networkChart.data.datasets[3].data =
+        filtered.map((item) => item.ping ?? item.ping_ms);
+
+    networkChart.data.datasets[4].data =
+        filtered.map((item) => item.jitter ?? item.jitter_ms);
+
+    networkChart.data.datasets[5].data =
+        filtered.map((item) => item.packet_loss);
+
+    const activeMetric = $("historyMetric")?.value || "all";
+    if (activeMetric !== "all") {
+        applyHistoryMetricFilter(activeMetric);
+    } else {
+        networkChart.update();
+    }
 
     updateChartDescription(filtered);
 }
@@ -1648,6 +1521,30 @@ function updateChartDescription(items) {
     if (isValidMetric(latest.download_mbps)) {
         parts.push(
             `Latest download speed: ${Number(latest.download_mbps).toFixed(1)} Mbps.`
+        );
+    }
+
+    if (isValidMetric(latest.upload_mbps)) {
+        parts.push(
+            `Latest upload speed: ${Number(latest.upload_mbps).toFixed(1)} Mbps.`
+        );
+    }
+
+    if (isValidMetric(latest.ping ?? latest.ping_ms)) {
+        parts.push(
+            `Latest ping: ${Math.round(Number(latest.ping ?? latest.ping_ms))} ms.`
+        );
+    }
+
+    if (isValidMetric(latest.jitter ?? latest.jitter_ms)) {
+        parts.push(
+            `Latest jitter: ${Math.round(Number(latest.jitter ?? latest.jitter_ms))} ms.`
+        );
+    }
+
+    if (isValidMetric(latest.packet_loss)) {
+        parts.push(
+            `Latest packet loss: ${Number(latest.packet_loss).toFixed(1)}%.`
         );
     }
 
@@ -1709,12 +1606,25 @@ async function startNetworkTest() {
 
     const button = $("startTest");
 
+    // NEW: profile selection (null = original standard test)
+    const profile = getSelectedProfile();
+    const runsBandwidth =
+        !profile ||
+        profile.checks.includes("download") ||
+        profile.checks.includes("upload");
+    let outcome = null;
+
     setStartButtonBusy(button, true);
+    setProfileSelectorDisabled(true);
+    renderProfileResultLoading(profile);
 
     setText(
         "testMessage",
-        "Testing network..."
+        profile
+            ? `Running ${profile.label} (about ${profile.estimated_seconds}s)...`
+            : "Testing network..."
     );
+    setText("dnsStatus", "Checking DNS on the server...");
 
     currentMetrics = {
         download: null,
@@ -1730,20 +1640,37 @@ async function startNetworkTest() {
     updateDashboard();
 
     try {
-        const [backendResult, bandwidthResult] =
+        void runBackendDnsCheck()
+            .then((dnsResult) => {
+                setText("dnsStatus", formatDnsStatus(dnsResult));
+            })
+            .catch(() => {
+                setText("dnsStatus", formatDnsStatus(null));
+            });
+
+        const [backendResult, bandwidthResult, protocolResult] =
             await Promise.all([
-                runBackendNetworkQualityTest(),
-                runCloudflareBandwidthTest()
+                runBackendNetworkQualityTest(profile?.id ?? null),
+                runsBandwidth
+                    ? runCloudflareBandwidthTest()
+                    : Promise.resolve(null),
+                runNetworkProtocolTest()
             ]);
+
+
 
         if (abortTestIfOffline()) return;
 
+        setText("protocolStatus", formatProtocolSummary(protocolResult));
         applyBackendMetrics(backendResult);
         applyBandwidthMetrics(bandwidthResult);
 
+        // Browser-latency fallback only for the standard test.
+        // Profiles must not silently swap in a different measurement.
         if (
-            currentMetrics.ping === null ||
-            currentMetrics.jitter === null
+            !profile &&
+            (currentMetrics.ping === null ||
+                currentMetrics.jitter === null)
         ) {
             const latency = await measureBrowserLatency();
 
@@ -1759,6 +1686,12 @@ async function startNetworkTest() {
         }
 
         if (abortTestIfOffline()) return;
+
+        outcome = renderProfileResult(
+            profile,
+            backendResult,
+            bandwidthResult
+        );
 
         detectNetworkType();
 
@@ -1809,14 +1742,21 @@ async function startNetworkTest() {
         updateHistoryChart(sessionTests);
         updateSessionStatistics();
 
-        await saveNetworkTest(entry);
+        // Do not save an empty record when every check failed.
+        if (outcome?.state !== "error") {
+            await saveNetworkTest(entry);
+            await loadConnectivityForecast();
+        }
 
-        setText(
-            "testMessage",
-            "Network test completed successfully."
+        setText("testMessage", describeOutcome(profile, outcome));
+
+        showToast(
+            outcome?.state === "partial"
+                ? "Test finished with some failed checks."
+                : outcome?.state === "error"
+                    ? "Diagnostic failed."
+                    : "Network test completed."
         );
-
-        showToast("Network test completed.");
 
     } catch (error) {
         console.error("Network test failed:", error);
@@ -1832,6 +1772,11 @@ async function startNetworkTest() {
         testInProgress = false;
 
         setStartButtonBusy(button, false);
+        setProfileSelectorDisabled(false);
+
+        if (profile && outcome === null) {
+            renderProfileResultStopped();
+        }
 
         // A run that did not complete successfully still holds its
         // snapshot: restore the previous results so the dashboard never
@@ -1851,15 +1796,262 @@ async function startNetworkTest() {
         }
     }
 }
+/* =========================================================
+   DIAGNOSTIC PROFILES
+   ========================================================= */
 
+let diagnosticProfiles = [];
+let selectedProfileId = null; // null = standard test (original behaviour)
+let lastBackendError = null;
+
+const CHECK_LABELS = {
+    ping: "Latency (ping)",
+    jitter: "Jitter",
+    packet_loss: "Packet loss",
+    download: "Download speed",
+    upload: "Upload speed"
+};
+
+const CHECK_VALUES = {
+    ping: ["ping_ms", "ms"],
+    jitter: ["jitter_ms", "ms"],
+    packet_loss: ["packet_loss", "%"]
+};
+
+async function readApiError(response) {
+    try {
+        const body = await response.json();
+        const detail = body?.detail;
+        if (typeof detail === "string") return detail;
+        if (detail?.error) return detail.error;
+    } catch (_) { /* fall through */ }
+    return `Request failed (${response.status}).`;
+}
+
+async function loadDiagnosticProfiles(fetchProfiles = fetch) {
+    try {
+        const response = await fetchProfiles(`${API_BASE}/diagnostic-profiles`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        const data = await response.json();
+        diagnosticProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+    } catch (error) {
+        console.warn("Diagnostic profiles unavailable:", error.message);
+        diagnosticProfiles = [];
+    }
+
+    if (!diagnosticProfiles.some((p) => p.id === selectedProfileId)) {
+        selectedProfileId = null;
+    }
+    renderProfileSelector();
+    return diagnosticProfiles;
+}
+
+function getSelectedProfile() {
+    return diagnosticProfiles.find((p) => p.id === selectedProfileId) ?? null;
+}
+
+function selectDiagnosticProfile(profileId) {
+    selectedProfileId = diagnosticProfiles.some((profile) => profile.id === profileId)
+        ? profileId
+        : null;
+    renderProfileSelector();
+    return getSelectedProfile();
+}
+
+function renderProfileSelector() {
+    const container = $("profileSelector");
+    const note = $("profileNote");
+    if (!container || typeof document === "undefined") return;
+
+    container.replaceChildren();
+    const choices = [
+        { id: "", label: "Standard Test", description: "The original full network test." },
+        ...diagnosticProfiles
+    ];
+
+    choices.forEach((profile) => {
+        const label = document.createElement("label");
+        label.className = "profile-card";
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = "diagnosticProfile";
+        input.value = profile.id;
+        input.checked = (profile.id || null) === selectedProfileId;
+        input.addEventListener("change", () => {
+            selectedProfileId = input.value || null;
+        });
+        const title = document.createElement("span");
+        title.className = "profile-title";
+        title.textContent = profile.label;
+        const description = document.createElement("small");
+        description.className = "profile-desc";
+        description.textContent = profile.description || "";
+        label.append(input, title, description);
+        container.append(label);
+    });
+    if (note) note.hidden = diagnosticProfiles.length > 0;
+}
+
+/* Pure logic: no DOM. Builds per-check rows from THIS run only. */
+function evaluateProfileResult(
+    profile,
+    backendResult,
+    bandwidthResult,
+    backendError = null
+) {
+    const backendChecks = backendResult?.checks ?? {};
+
+    const rows = profile.checks.map((check) => {
+        if (check === "download" || check === "upload") {
+            const value = bandwidthResult?.[check];
+            return isValidMetric(value)
+                ? { check, status: "ok", detail: `${Number(value).toFixed(2)} Mbps` }
+                : { check, status: "failed", detail: "Speed test unavailable or timed out." };
+        }
+
+        const info = backendChecks[check];
+
+        if (!backendResult || !info) {
+            return {
+                check,
+                status: "failed",
+                detail: backendError || "The backend did not return this check."
+            };
+        }
+
+        if (info.status === "ok") {
+            const [key, unit] = CHECK_VALUES[check];
+            const value = backendResult[key];
+            if (!isValidMetric(value)) {
+                return {
+                    check,
+                    status: "failed",
+                    detail: "The backend marked this check successful without a valid measurement."
+                };
+            }
+            return {
+                check,
+                status: "ok",
+                detail: `${Number(value).toFixed(2)} ${unit}`
+            };
+        }
+
+        return { check, status: "failed", detail: info.reason || "Check failed." };
+    });
+
+    const failed = rows.filter((row) => row.status === "failed");
+
+    const state =
+        failed.length === 0 ? "success"
+        : failed.length === rows.length ? "error"
+        : "partial";
+
+    return {
+        state,
+        rows,
+        failed: failed.map((row) => CHECK_LABELS[row.check] ?? row.check),
+        measuredAt: backendResult?.measured_at ?? null
+    };
+}
+
+function setProfileSelectorDisabled(disabled) {
+    const container = $("profileSelector");
+    if (container) container.disabled = disabled;
+}
+
+function showProfilePanel(state, build) {
+    const panel = $("profileResult");
+    if (!panel) return;
+    panel.hidden = false;
+    panel.dataset.state = state;
+    panel.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+    panel.replaceChildren();
+    build(panel);
+}
+
+function renderProfileResultLoading(profile) {
+    const panel = $("profileResult");
+    if (!profile) {
+        if (panel) panel.hidden = true;
+        return;
+    }
+    showProfilePanel("loading", (p) => {
+        p.textContent = `Running ${profile.label}... please keep this tab open.`;
+    });
+}
+
+function renderProfileResultStopped() {
+    showProfilePanel("error", (p) => {
+        p.textContent = "The test stopped before it finished. No fresh results to show.";
+    });
+}
+
+function renderProfileResult(profile, backendResult, bandwidthResult) {
+    if (!profile) return null;
+    const evaluation = evaluateProfileResult(profile, backendResult, bandwidthResult, lastBackendError);
+
+    showProfilePanel(evaluation.state, (panel) => {
+        const heading = document.createElement("strong");
+        heading.textContent = profile.label;
+
+        const when = evaluation.measuredAt
+            ? document.createElement("span")
+            : null;
+        if (when) {
+            when.className = "profile-time";
+            when.textContent = ` Measured at ${new Date(evaluation.measuredAt).toLocaleTimeString()}`;
+        }
+
+        const list = document.createElement("ul");
+        evaluation.rows.forEach((row) => {
+            const item = document.createElement("li");
+
+            const badge = document.createElement("span");
+            badge.className = "check-badge";
+            badge.dataset.status = row.status;
+            badge.textContent = row.status === "ok" ? "OK" : "Failed";
+
+            const name = document.createElement("span");
+            name.textContent = CHECK_LABELS[row.check] ?? row.check;
+
+            const detail = document.createElement("span");
+            detail.className = "profile-desc";
+            detail.textContent = row.detail;
+
+            item.append(badge, name, detail);
+            list.append(item);
+        });
+
+        panel.append(heading, ...(when ? [when] : []), list);
+    });
+
+    return { state: evaluation.state, failed: evaluation.failed };
+}
+
+function describeOutcome(profile, outcome) {
+    if (!profile || !outcome) return "Network test completed successfully.";
+    if (outcome.state === "success") {
+        return `${profile.label} completed. All checks succeeded.`;
+    }
+    if (outcome.state === "partial") {
+        return `${profile.label} finished, but ${outcome.failed.length} check(s) failed: ${outcome.failed.join(", ")}.`;
+    }
+    return `${profile.label} failed. No check produced a result.`;
+}
 /* =========================================================
    BACKEND NETWORK QUALITY
    ========================================================= */
 
-async function runBackendNetworkQualityTest() {
+async function runBackendNetworkQualityTest(profileId = null) {
+    lastBackendError = null;
+
     try {
+        const query = profileId
+            ? `?profile=${encodeURIComponent(profileId)}`
+            : "";
+
         const response = await fetch(
-            `${API_BASE}/network-quality`,
+            `${API_BASE}/network-quality${query}`,
             {
                 method: "GET",
                 cache: "no-store"
@@ -1867,6 +2059,7 @@ async function runBackendNetworkQualityTest() {
         );
 
         if (!response.ok) {
+            lastBackendError = await readApiError(response);
             throw new Error(
                 `Network quality API returned ${response.status}`
             );
@@ -1884,8 +2077,101 @@ async function runBackendNetworkQualityTest() {
             error.message
         );
 
+        lastBackendError = lastBackendError || error.message;
+
         return null;
     }
+}
+
+async function runBackendDnsCheck() {
+    try {
+        const response = await fetch(
+            `${API_BASE}/dns-check`,
+            { method: "GET", cache: "no-store" }
+        );
+        if (!response.ok) {
+            throw new Error(`DNS check API returned ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.warn("Backend DNS check unavailable:", error.message);
+        return null;
+    }
+}
+
+function formatDnsStatus(result) {
+    if (!result || typeof result !== "object") {
+        return "Server DNS: status unavailable.";
+    }
+
+    const duration = Number.isFinite(result.duration_ms)
+        ? ` in ${result.duration_ms} ms`
+        : "";
+
+    if (result.status === "ok") {
+        return `Server DNS: resolved${duration}.`;
+    }
+
+    const category = {
+        not_found: "hostname not found",
+        resolver_unavailable: "resolver unavailable",
+        capacity_exhausted: "diagnostic capacity reached",
+        timeout: "lookup timed out",
+        unknown: "lookup failed"
+    }[result.failure_category] || "lookup failed";
+
+    return `Server DNS: ${category}${duration}.`;
+} async function runNetworkProtocolTest() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+        const response = await fetch(
+            `${API_BASE}/network-protocols`,
+            {
+                method: "GET",
+                cache: "no-store",
+                signal: controller.signal
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(`Network protocol API returned ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.warn("Network protocol endpoint unavailable:", error.message);
+        return null;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+function formatProtocolSummary(result) {
+    if (!result || typeof result !== "object") {
+        return "Server IPv4/IPv6 status is unavailable.";
+    }
+
+    const describe = (protocol, check) => {
+        const label = protocol;
+        if (!check || typeof check !== "object") {
+            return `${label} status unknown`;
+        }
+        if (check.status === "available") {
+            return `${label} connected`;
+        }
+        if (check.status === "unsupported") {
+            return `${label} unsupported`;
+        }
+        const reason = {
+            dns_failure: "DNS lookup failed",
+            timeout: "connection timed out",
+            connection_failure: "connection failed"
+        }[check.reason] || "unavailable";
+        return `${label} ${reason}`;
+    };
+
+    return `Server: ${describe("IPv4", result.ipv4)} · ${describe("IPv6", result.ipv6)}`;
 }
 
 function applyBackendMetrics(data) {
@@ -2447,6 +2733,66 @@ function updateAIAnalysis() {
     }
 }
 
+function formatAnomalyMetric(metric) {
+    if (!metric || !ANOMALY_METRIC_LABELS[metric.feature]) {
+        return null;
+    }
+
+    const observed = safeNumber(metric.observed_value);
+    const reconstructed = safeNumber(metric.reconstructed_value);
+    const absoluteError = safeNumber(metric.absolute_error);
+    const normalizedError = safeNumber(metric.normalized_error);
+    const contribution = safeNumber(metric.contribution_percent);
+    const rank = safeNumber(metric.rank);
+
+    if (
+        observed === null ||
+        reconstructed === null ||
+        absoluteError === null ||
+        normalizedError === null ||
+        contribution === null ||
+        rank === null ||
+        rank < 1 ||
+        !Number.isInteger(rank) ||
+        contribution < 0
+    ) {
+        return null;
+    }
+
+    const unit = METRIC_UNITS[metric.feature];
+    return `Rank ${rank}: ${ANOMALY_METRIC_LABELS[metric.feature]} — observed ${formatMetric(observed, unit, 2)}, reconstructed ${formatMetric(reconstructed, unit, 2)} (error ${formatMetric(absoluteError, unit, 2)}; standardized error ${normalizedError.toFixed(2)}); ${contribution.toFixed(1)}% contribution.`;
+}
+
+function renderAnomalyExplanation(explanation) {
+    const list = $("anomalyExplanation");
+    if (!list) return;
+
+    while (list.firstChild) {
+        list.removeChild(list.firstChild);
+    }
+
+    const metrics = Array.isArray(explanation?.metrics)
+        ? explanation.metrics
+        : [];
+    const lines = metrics
+        .map(formatAnomalyMetric)
+        .filter((line) => line !== null)
+        .slice(0, 3);
+
+    if (!lines.length) {
+        list.hidden = true;
+        return;
+    }
+
+    lines.forEach((line) => {
+        const item = document.createElement("li");
+        item.textContent = line;
+        list.appendChild(item);
+    });
+
+    list.hidden = false;
+}
+
 async function updateAISectionsFromBackend() {
     try {
         const response = await fetch(
@@ -2455,6 +2801,7 @@ async function updateAISectionsFromBackend() {
         );
 
         if (!response.ok) {
+            renderAnomalyExplanation(null);
             const prediction = $("predictionResult");
             if (prediction) {
                 prediction.textContent =
@@ -2467,6 +2814,7 @@ async function updateAISectionsFromBackend() {
         const result = await response.json();
 
         if (!result?.success) {
+            renderAnomalyExplanation(null);
             const prediction = $("predictionResult");
             if (prediction) {
                 prediction.textContent =
@@ -2478,6 +2826,7 @@ async function updateAISectionsFromBackend() {
 
         const predictionData = result.prediction || {};
         const anomalyData = result.anomaly || {};
+        renderAnomalyExplanation(anomalyData.explanation);
 
         if (
             predictionData.predicted_connectivity_score !== undefined
@@ -2508,6 +2857,7 @@ async function updateAISectionsFromBackend() {
         }
 
     } catch (error) {
+        renderAnomalyExplanation(null);
         const prediction = $("predictionResult");
         if (prediction) {
             prediction.textContent =
@@ -2518,6 +2868,410 @@ async function updateAISectionsFromBackend() {
             "Backend AI analysis unavailable:",
             error.message
         );
+    }
+}
+
+/* =========================================================
+   CONNECTIVITY FORECAST
+   ========================================================= */
+
+const FORECAST_METRIC_META = Object.freeze({
+    connectivity_score: { label: "Connectivity Score", unit: "/100", decimals: 1 },
+    download_mbps: { label: "Download Speed", unit: "Mbps", decimals: 1 },
+    upload_mbps: { label: "Upload Speed", unit: "Mbps", decimals: 1 },
+    ping_ms: { label: "Ping", unit: "ms", decimals: 1 },
+    jitter_ms: { label: "Jitter", unit: "ms", decimals: 1 },
+    packet_loss: { label: "Packet Loss", unit: "%", decimals: 2 }
+});
+
+function resolveForecastRiskMeta(level) {
+    const normalized = typeof level === "string" ? level.trim().toLowerCase() : "";
+    if (normalized === "high") {
+        return {
+            key: "high",
+            label: "High Risk",
+            iconClass: "fa-solid fa-triangle-exclamation"
+        };
+    }
+    if (normalized === "moderate") {
+        return {
+            key: "moderate",
+            label: "Moderate Risk",
+            iconClass: "fa-solid fa-circle-exclamation"
+        };
+    }
+    if (normalized === "low") {
+        return {
+            key: "low",
+            label: "Low Risk",
+            iconClass: "fa-solid fa-circle-check"
+        };
+    }
+    if (
+        normalized === "insufficient data" ||
+        normalized === "insufficient_data" ||
+        normalized === "insufficient"
+    ) {
+        return {
+            key: "insufficient",
+            label: "Insufficient Data",
+            iconClass: "fa-solid fa-circle-info"
+        };
+    }
+    return {
+        key: "unavailable",
+        label: "Pending Forecast",
+        iconClass: "fa-solid fa-circle-info"
+    };
+}
+
+function formatForecastRange(metricEntry, decimals = 1) {
+    if (!metricEntry || typeof metricEntry !== "object") return "Unavailable";
+    const predicted = safeNumber(metricEntry.predicted);
+    const lower = safeNumber(metricEntry.lower);
+    const upper = safeNumber(metricEntry.upper);
+    const unit = metricEntry.unit || "";
+
+    if (predicted === null) return "Unavailable";
+    const mainText = formatMetric(predicted, unit, decimals);
+    if (lower === null || upper === null) return mainText;
+    return `${mainText} (${lower.toFixed(decimals)} – ${upper.toFixed(decimals)})`;
+}
+
+function normalizeForecastResponse(payload) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.horizons)) {
+        return null;
+    }
+
+    const horizons = payload.horizons.filter(
+        (item) =>
+            item &&
+            typeof item.horizon === "string" &&
+            item.metrics &&
+            typeof item.metrics === "object"
+    );
+
+    if (horizons.length === 0) {
+        return null;
+    }
+
+    return {
+        success: Boolean(payload.success),
+        generated_at: payload.generated_at || null,
+        history_summary: payload.history_summary || {},
+        degradation_risk: payload.degradation_risk || {
+            level: "Insufficient Data",
+            score: null,
+            reasons: []
+        },
+        horizons
+    };
+}
+
+function updateForecastRiskBadge(risk) {
+    const badge = $("forecastRiskBadge");
+    const icon = $("forecastRiskIcon");
+    const text = $("forecastRiskText");
+    if (!badge || !text) return;
+
+    const meta = resolveForecastRiskMeta(risk?.level);
+    badge.dataset.risk = meta.key;
+
+    const score = safeNumber(risk?.score);
+    text.textContent =
+        score !== null &&
+        meta.key !== "unavailable" &&
+        meta.key !== "insufficient"
+            ? `${meta.label} (${Math.round(score)}/100)`
+            : meta.label;
+
+    if (icon) {
+        icon.className = meta.iconClass;
+    }
+}
+
+function updateForecastChart(forecastData, metricKey = "connectivity_score") {
+    const container = $("forecastChartContainer");
+    const canvas = $("forecastChart");
+    if (!container || !canvas) return;
+
+    const normalized = normalizeForecastResponse(forecastData);
+    if (!normalized) {
+        container.hidden = true;
+        return;
+    }
+
+    const meta = FORECAST_METRIC_META[metricKey] || FORECAST_METRIC_META.connectivity_score;
+    const points = normalized.horizons.map((item) => item.metrics?.[metricKey] || {});
+    const hasValues = points.some((m) => safeNumber(m.predicted) !== null);
+
+    if (!hasValues) {
+        container.hidden = true;
+        return;
+    }
+
+    container.hidden = false;
+    const baseline = safeNumber(points[0]?.baseline);
+    const labels = baseline !== null
+        ? ["Now", ...normalized.horizons.map((h) => `+${h.horizon}`)]
+        : normalized.horizons.map((h) => `+${h.horizon}`);
+
+    const predictedSeries = baseline !== null
+        ? [baseline, ...points.map((m) => safeNumber(m.predicted))]
+        : points.map((m) => safeNumber(m.predicted));
+
+    const upperSeries = baseline !== null
+        ? [baseline, ...points.map((m) => safeNumber(m.upper))]
+        : points.map((m) => safeNumber(m.upper));
+
+    const lowerSeries = baseline !== null
+        ? [baseline, ...points.map((m) => safeNumber(m.lower))]
+        : points.map((m) => safeNumber(m.lower));
+
+    canvas.setAttribute(
+        "aria-label",
+        `${meta.label} forecast chart across ${normalized.horizons.map((h) => h.horizon).join(", ")} horizons.`
+    );
+
+    if (typeof Chart === "undefined") {
+        return;
+    }
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    if (forecastChart) {
+        forecastChart.data.labels = labels;
+        forecastChart.data.datasets[0].data = upperSeries;
+        forecastChart.data.datasets[1].data = lowerSeries;
+        forecastChart.data.datasets[2].label = `Predicted ${meta.label} (${meta.unit})`;
+        forecastChart.data.datasets[2].data = predictedSeries;
+        forecastChart.update();
+        return;
+    }
+
+    forecastChart = new Chart(context, {
+        type: "line",
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: "Upper Confidence Bound",
+                    data: upperSeries,
+                    borderColor: "rgba(139, 92, 246, 0.35)",
+                    borderDash: [4, 4],
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.3
+                },
+                {
+                    label: "Lower Confidence Bound",
+                    data: lowerSeries,
+                    borderColor: "rgba(139, 92, 246, 0.35)",
+                    backgroundColor: "rgba(139, 92, 246, 0.14)",
+                    borderDash: [4, 4],
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    fill: "-1",
+                    tension: 0.3
+                },
+                {
+                    label: `Predicted ${meta.label} (${meta.unit})`,
+                    data: predictedSeries,
+                    borderColor: "#7c3aed",
+                    backgroundColor: "rgba(124, 58, 237, 0.15)",
+                    borderWidth: 2.5,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    fill: false,
+                    tension: 0.3
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+                legend: { display: true }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+}
+
+function renderForecastSection(payload, unavailableMessage = null) {
+    const statusEl = $("forecastStatus");
+    const horizonsEl = $("forecastHorizons");
+    const reasonsEl = $("forecastRiskReasons");
+    const chartContainer = $("forecastChartContainer");
+    const normalized = normalizeForecastResponse(payload);
+
+    if (!normalized) {
+        latestForecastData = null;
+        updateForecastRiskBadge(null);
+        if (horizonsEl) {
+            while (horizonsEl.firstChild) horizonsEl.removeChild(horizonsEl.firstChild);
+        }
+        if (reasonsEl) {
+            while (reasonsEl.firstChild) reasonsEl.removeChild(reasonsEl.firstChild);
+            reasonsEl.hidden = true;
+        }
+        if (chartContainer) chartContainer.hidden = true;
+        if (statusEl) {
+            statusEl.textContent =
+                unavailableMessage ||
+                "Connectivity forecast is currently unavailable.";
+        }
+        return;
+    }
+
+    const summary = normalized.history_summary || {};
+    const totalRecords = safeNumber(summary.total_records, 0);
+    const hasHistory = totalRecords > 0;
+    const isFallback = !hasHistory || Boolean(summary.fallback_used) || summary.sufficient_history === false;
+
+    latestForecastData = normalized;
+    updateForecastRiskBadge(
+        isFallback
+            ? { level: "Insufficient Data", score: null }
+            : normalized.degradation_risk
+    );
+
+    if (statusEl) {
+        if (!hasHistory) {
+            statusEl.textContent =
+                "Not enough historical measurements yet. Run a connectivity test to start forecasting.";
+        } else if (isFallback) {
+            statusEl.textContent =
+                `Sparse-history fallback active (${totalRecords} saved measurement${totalRecords === 1 ? "" : "s"}). Confidence ranges narrow as more tests accumulate.`;
+        } else {
+            statusEl.textContent =
+                `Forecast computed from ${totalRecords} measurements across ${summary.window_count || 0} rolling time windows.`;
+        }
+    }
+
+    if (horizonsEl) {
+        while (horizonsEl.firstChild) horizonsEl.removeChild(horizonsEl.firstChild);
+
+        if (hasHistory) {
+            normalized.horizons.forEach((entry) => {
+            const card = document.createElement("article");
+            card.className = "forecast-horizon-card";
+
+            const header = document.createElement("div");
+            header.className = "forecast-horizon-header";
+
+            const title = document.createElement("h3");
+            title.className = "forecast-horizon-title";
+            title.textContent = `+${entry.horizon} Horizon`;
+
+            const riskLevel = isFallback
+                ? "Insufficient Data"
+                : (entry.degradation_risk?.level || "Insufficient Data");
+            const riskMeta = resolveForecastRiskMeta(riskLevel);
+            const miniBadge = document.createElement("span");
+            miniBadge.className = "forecast-risk-badge";
+            miniBadge.dataset.risk = riskMeta.key;
+            const miniIcon = document.createElement("i");
+            miniIcon.className = riskMeta.iconClass;
+            miniIcon.setAttribute("aria-hidden", "true");
+            const miniLabel = document.createElement("span");
+            miniLabel.textContent = riskMeta.label;
+            miniBadge.append(miniIcon, miniLabel);
+
+            header.append(title, miniBadge);
+
+            const scoreMetric = entry.metrics?.connectivity_score;
+            const scoreEl = document.createElement("div");
+            scoreEl.className = "forecast-horizon-score";
+            const predScore = safeNumber(scoreMetric?.predicted);
+            scoreEl.textContent =
+                predScore !== null ? `${predScore.toFixed(1)} / 100` : "Unavailable";
+
+            const rangeEl = document.createElement("p");
+            rangeEl.className = "forecast-horizon-range";
+            rangeEl.textContent =
+                predScore !== null
+                    ? `Range: ${formatForecastRange(scoreMetric, 1)}`
+                    : "Collect more measurements to project score range";
+
+            const list = document.createElement("dl");
+            list.className = "forecast-horizon-metrics";
+
+            const rows = [
+                ["Download", entry.metrics?.download_mbps, 1],
+                ["Upload", entry.metrics?.upload_mbps, 1],
+                ["Ping", entry.metrics?.ping_ms, 1],
+                ["Packet Loss", entry.metrics?.packet_loss, 2]
+            ];
+
+            rows.forEach(([label, metricVal, dec]) => {
+                const dt = document.createElement("dt");
+                dt.textContent = label;
+                const dd = document.createElement("dd");
+                const num = safeNumber(metricVal?.predicted);
+                dd.textContent =
+                    num !== null ? formatMetric(num, metricVal?.unit || "", dec) : "—";
+                list.append(dt, dd);
+            });
+
+                card.append(header, scoreEl, rangeEl, list);
+                horizonsEl.appendChild(card);
+            });
+        }
+    }
+
+    if (reasonsEl) {
+        while (reasonsEl.firstChild) reasonsEl.removeChild(reasonsEl.firstChild);
+        const reasons = Array.isArray(normalized.degradation_risk?.reasons)
+            ? normalized.degradation_risk.reasons
+            : [];
+        if (reasons.length > 0) {
+            reasons.forEach((reason) => {
+                const li = document.createElement("li");
+                li.textContent = `• ${reason}`;
+                reasonsEl.appendChild(li);
+            });
+            reasonsEl.hidden = false;
+        } else {
+            reasonsEl.hidden = true;
+        }
+    }
+
+    const selectedMetric = $("forecastMetric")?.value || "connectivity_score";
+    updateForecastChart(normalized, selectedMetric);
+}
+
+async function loadConnectivityForecast(horizons = "1h,6h,24h") {
+    try {
+        const params = new URLSearchParams({ horizons });
+        const response = await fetch(
+            `${API_BASE}/predict/forecast?${params.toString()}`,
+            { cache: "no-store" }
+        );
+        if (!response.ok) {
+            renderForecastSection(
+                null,
+                "Forecast service is currently unavailable."
+            );
+            return null;
+        }
+        const payload = await response.json();
+        renderForecastSection(payload);
+        return payload;
+    } catch (error) {
+        console.info("Backend connectivity forecast unavailable:", error.message);
+        renderForecastSection(
+            null,
+            "Forecast service is unavailable. Check backend connection."
+        );
+        return null;
     }
 }
 
@@ -2816,7 +3570,12 @@ const smartConnectivity = {
     updateDashboard,
     updateNetworkStatus,
     resolveNetworkType,
-    detectNetworkType
+    detectNetworkType,
+    normalizeForecastResponse,
+    resolveForecastRiskMeta,
+    formatForecastRange,
+    loadConnectivityForecast,
+    renderForecastSection
 };
 
 /* ─── Browser Exports ───────────────────────────────── */
@@ -2848,6 +3607,12 @@ if (typeof window !== "undefined") {
     window.loadNetworkHistory =
         loadNetworkHistory;
 
+    window.applyHistoryMetricFilter =
+        applyHistoryMetricFilter;
+
+    window.normalizeHistoryItem =
+        normalizeHistoryItem;
+
     window.METRIC_UNITS = METRIC_UNITS;
 
     window.resolveNetworkType =
@@ -2855,6 +3620,9 @@ if (typeof window !== "undefined") {
 
     window.detectNetworkType =
         detectNetworkType;
+
+    window.loadConnectivityForecast =
+        loadConnectivityForecast;
 }
 
 /* ─── Node.js Exports for Tests ─────────────────────── */
@@ -2867,9 +3635,16 @@ if (typeof module !== "undefined" && module.exports) {
         formatMetric,
         formatNetworkMetric,
         validateHistoryFilterValues,
+        evaluateProfileResult,
+        loadDiagnosticProfiles,
+        selectDiagnosticProfile,
+        getSelectedProfile,
+        describeOutcome,
         calculateConnectivityScore: sharedCalculateConnectivityScore,
         getConnectivityStatus,
         resolveConnectivityIndicator,
+        ..._metrics,
+        ..._networkStatus,
         resolveDashboardDisplayState,
         isDeviceOffline,
         clearLiveMetrics,
@@ -2877,12 +3652,24 @@ if (typeof module !== "undefined" && module.exports) {
         updateDashboard,
         updateNetworkStatus,
         handleConnectivityTransition,
+        formatAnomalyMetric,
         loadNetworkHistory,
+        normalizeHistoryItem,
+        applyHistoryMetricFilter,
         smartConnectivity,
         resolveNetworkType,
-        detectNetworkType
+        detectNetworkType,
+        formatDnsStatus,
+        normalizeForecastResponse,
+        resolveForecastRiskMeta,
+        formatForecastRange,
+        loadConnectivityForecast,
+        renderForecastSection,
+        formatProtocolSummary,
+        runNetworkProtocolTest
     };
 }
 /* =========================================================
    END OF SCRIPT
    ========================================================= */
+
