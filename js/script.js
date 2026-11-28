@@ -2222,7 +2222,7 @@ function describeOutcome(profile, outcome) {
    ========================================================= */
 
 function buildNetworkQualityStreamUrl(apiBase, profileId = null) {
-    const base = apiBase.replace(/\\/$/, "");
+    const base = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
     const params = new URLSearchParams();
     if (profileId) params.set("profile", profileId);
     const query = params.toString();
@@ -2230,7 +2230,7 @@ function buildNetworkQualityStreamUrl(apiBase, profileId = null) {
 }
 
 function buildNetworkQualityJsonUrl(apiBase, profileId = null) {
-    const base = apiBase.replace(/\\/$/, "");
+    const base = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
     const query = profileId ? `?profile=${encodeURIComponent(profileId)}` : "";
     return `${base}/network-quality${query}`;
 }
@@ -2265,6 +2265,7 @@ function requestNetworkQualityWithProgress(
 
     return new Promise((resolve, reject) => {
         let settled = false;
+        let fallbackStarted = false;
         let source;
         const clearActive = () => {
             if (activeDiagnosticEventSource === source) activeDiagnosticEventSource = null;
@@ -2283,7 +2284,8 @@ function requestNetworkQualityWithProgress(
         };
         const abort = () => finish(new Error("Diagnostic cancelled."));
         const fallback = async () => {
-            if (settled) return;
+            if (settled || fallbackStarted) return;
+            fallbackStarted = true;
             close();
             try {
                 const result = await fetchNetworkQualityJson(profileId, fetchImpl);
