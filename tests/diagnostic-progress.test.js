@@ -18,7 +18,7 @@ test("diagnostic progress reflects only actual stage statuses, never percentages
     state = reduceDiagnosticProgress(state, { stage: "Download + upload", status: "partial" });
 
     const summary = formatDiagnosticProgress(state);
-    assert.match(summary, /Running:/) === false;
+    assert.doesNotMatch(summary, /Running:/);
     assert.match(summary, /Completed: DNS, Ping/);
     assert.match(summary, /Partial: Download \+ upload/);
     assert.equal(summary.includes("%"), false);
