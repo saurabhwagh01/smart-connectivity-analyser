@@ -223,6 +223,8 @@ Make sure the backend is running before using frontend features that require API
 | POST | `/api/network-test` | Submit/save a network test record |
 | GET | `/api/network-history` | Retrieve historical network records |
 | DELETE | `/api/network-history` | Delete saved network history |
+
+Network history can be deleted by record IDs with `DELETE /api/network-history` and a JSON body such as `{"ids":[1,2]}`. Deleting everything requires the explicit `?all=true` query parameter. The dashboard confirms either destructive action before sending it. Expired records are pruned in batches of at most 500 when a new measurement is saved; the default retention period is 365 days and can be configured with `NETWORK_HISTORY_RETENTION_DAYS` (1–3650 days).
 | GET | `/api/ai/status` | Check AI model status |
 | GET | `/api/ai/prediction` | Request a connectivity prediction |
 | GET | `/api/ai/anomaly` | Analyse the latest complete record for anomalies |

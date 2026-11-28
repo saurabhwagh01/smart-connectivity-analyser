@@ -569,6 +569,13 @@
     aria-live="polite"
 ></p>
 
+<div class="flex flex-wrap items-center gap-2" aria-label="History deletion controls">
+  <button id="deleteSelectedHistory" type="button" class="control-btn" disabled>Delete selected</button>
+  <button id="deleteAllHistory" type="button" class="control-btn">Delete all history</button>
+  <span id="historyDeleteMessage" class="text-xs text-slate-600" role="status" aria-live="polite"></span>
+</div>
+<ul id="historyRecordSelection" class="max-h-48 overflow-y-auto space-y-1" aria-label="Select network history records to delete"></ul>
+
 <p
     id="historyEmptyState"
     class="history-empty-state"

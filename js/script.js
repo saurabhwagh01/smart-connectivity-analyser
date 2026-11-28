@@ -191,6 +191,9 @@ function setupButtons() {
         exportHistoryToCSV
     );
 
+    $("deleteSelectedHistory")?.addEventListener("click", deleteSelectedHistory);
+    $("deleteAllHistory")?.addEventListener("click", deleteAllHistory);
+
     $("historyRange")?.addEventListener("change", (event) => {
         loadNetworkHistory(event.target.value);
     });
@@ -1002,6 +1005,7 @@ function applyHistoryMetricFilter(selectedMetric = "all") {
 
 function normalizeHistoryItem(item = {}) {
     return {
+        id: Number.isSafeInteger(Number(item.id)) ? Number(item.id) : null,
         timestamp:
             item.timestamp ||
             item.created_at ||
@@ -1275,6 +1279,7 @@ async function loadNetworkHistory(range = null) {
             .filter((item) =>
                 Number.isFinite(Date.parse(item.timestamp))
             );
+        renderHistoryRecordSelection(sessionTests);
 
         if (sessionTests.length === 0) {
             updateHistoryChart([], "all");
@@ -1349,6 +1354,7 @@ async function loadNetworkHistory(range = null) {
         );
 
         sessionTests = [];
+        renderHistoryRecordSelection([]);
 
         updateHistoryChart([], "all");
 
@@ -1367,6 +1373,70 @@ async function loadNetworkHistory(range = null) {
         updateSessionStatistics();
 
         setHistoryFilterMessage("");
+    }
+}
+
+function renderHistoryRecordSelection(items = sessionTests) {
+    const list = $("historyRecordSelection");
+    const deleteButton = $("deleteSelectedHistory");
+    if (!list) return;
+
+    list.replaceChildren();
+    for (const item of items) {
+        if (!Number.isSafeInteger(item.id) || item.id <= 0) continue;
+        const entry = document.createElement("li");
+        const label = document.createElement("label");
+        const checkbox = document.createElement("input");
+        const description = document.createElement("span");
+        label.className = "flex items-center gap-2 rounded-lg p-2 text-xs hover:bg-white/70";
+        checkbox.type = "checkbox";
+        checkbox.dataset.historyId = String(item.id);
+        description.textContent = `${new Date(item.timestamp).toLocaleString()} — score ${item.connectivity_score ?? "unavailable"}`;
+        checkbox.addEventListener("change", () => {
+            if (deleteButton) {
+                deleteButton.disabled =
+                    !list.querySelector("input[data-history-id]:checked");
+            }
+        });
+        label.append(checkbox, description);
+        entry.append(label);
+        list.append(entry);
+    }
+    if (deleteButton) deleteButton.disabled = true;
+}
+
+async function deleteSelectedHistory() {
+    const selectedIds = Array.from(
+        $("historyRecordSelection")?.querySelectorAll("input[data-history-id]:checked") || []
+    ).map((checkbox) => Number(checkbox.dataset.historyId));
+    if (!selectedIds.length) return;
+    if (!window.confirm(`Delete ${selectedIds.length} selected network history record(s)? This cannot be undone.`)) return;
+
+    await deleteHistoryRequest("/network-history", { ids: selectedIds });
+}
+
+async function deleteAllHistory() {
+    if (!window.confirm("Delete all saved network history? This cannot be undone.")) return;
+    await deleteHistoryRequest("/network-history?all=true");
+}
+
+async function deleteHistoryRequest(path, body = undefined) {
+    const message = $("historyDeleteMessage");
+    if (message) message.textContent = "Deleting network history…";
+    try {
+        const response = await fetch(`${API_BASE}${path}`, {
+            method: "DELETE",
+            headers: body ? { "Content-Type": "application/json" } : undefined,
+            body: body ? JSON.stringify(body) : undefined
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error("The database could not delete the selected history.");
+        }
+        if (message) message.textContent = `Deleted ${result.deleted_count} network record(s).`;
+        await loadNetworkHistory();
+    } catch (error) {
+        if (message) message.textContent = `History deletion failed: ${error.message}`;
     }
 }
 

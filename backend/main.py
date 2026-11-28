@@ -37,6 +37,7 @@ from pathlib import Path
 from backend.protocol_diagnostics import detect_network_protocols
 
 import sqlite3
+import os
 from contextlib import closing, contextmanager
 import json
 import logging
@@ -513,8 +514,6 @@ class NetworkTest(BaseModel):
             raise ValueError("Input should be a number, not a boolean")
 
         return value
-
-
     @field_validator("timestamp")
     @classmethod
     def validate_timestamp(cls, value):
@@ -547,6 +546,50 @@ class NetworkTest(BaseModel):
             )
 
         return self
+
+
+class HistoryDeleteRequest(BaseModel):
+    ids: list[int] = Field(default_factory=list, max_length=500)
+
+    @field_validator("ids", mode="before")
+    @classmethod
+    def validate_ids(cls, value):
+        if not isinstance(value, list) or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0
+            for item in value
+        ):
+            raise ValueError("History record IDs must be positive integers")
+        return value
+
+
+DEFAULT_HISTORY_RETENTION_DAYS = 365
+MAX_HISTORY_CLEANUP_BATCH = 500
+
+
+def get_history_retention_days() -> int:
+    try:
+        days = int(os.getenv("NETWORK_HISTORY_RETENTION_DAYS", DEFAULT_HISTORY_RETENTION_DAYS))
+    except (TypeError, ValueError):
+        return DEFAULT_HISTORY_RETENTION_DAYS
+    return min(max(days, 1), 3650)
+
+
+def cleanup_expired_history(connection, *, now=None, batch_size=MAX_HISTORY_CLEANUP_BATCH):
+    """Delete at most one bounded batch of expired measurements per write."""
+    cutoff = (now or datetime.now()) - timedelta(days=get_history_retention_days())
+    cursor = connection.execute(
+        """
+        DELETE FROM network_tests
+        WHERE id IN (
+            SELECT id FROM network_tests
+            WHERE datetime(timestamp) < datetime(?)
+            ORDER BY datetime(timestamp) ASC, id ASC
+            LIMIT ?
+        )
+        """,
+        (cutoff.isoformat(), min(max(int(batch_size), 1), MAX_HISTORY_CLEANUP_BATCH)),
+    )
+    return cursor.rowcount
 
 
 
@@ -944,6 +987,8 @@ def save_network_test(data: NetworkTest):
         )
         connection.commit()
         test_id = cursor.lastrowid
+
+        run_retention_cleanup(connection)
 
 
 
@@ -1391,39 +1436,43 @@ def predict_forecast(
 
 
 # ============================================================
-
 # DELETE NETWORK HISTORY
-
 # ============================================================
 
-
-
 @app.delete("/api/network-history")
+def delete_network_history(
+    request: HistoryDeleteRequest | None = None,
+    delete_all: bool = Query(default=False, alias="all"),
+):
+    if not delete_all and request is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Select history records to delete, or explicitly request all=true.",
+        )
 
-def delete_network_history():
-
-
+    if not delete_all and not request.ids:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one history record ID is required.",
+        )
 
     with history_database(HISTORY_DELETE_ERROR) as connection:
-        connection.execute("DELETE FROM network_tests")
+        if delete_all:
+            cursor = connection.execute("DELETE FROM network_tests")
+        else:
+            placeholders = ",".join("?" for _ in request.ids)
+            cursor = connection.execute(
+                f"DELETE FROM network_tests WHERE id IN ({placeholders})",
+                request.ids,
+            )
         connection.commit()
-
-
-
-
+        deleted_count = cursor.rowcount
 
     return {
-
         "status": "success",
-
-        "message": "Network history deleted"
-
+        "deleted_count": deleted_count,
+        "message": "Network history deleted",
     }
-
-
-
-
-
 # ============================================================
 
 # RUN SERVER
