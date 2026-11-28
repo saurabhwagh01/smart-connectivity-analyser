@@ -906,6 +906,10 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT, interface=None):
             timeout=subprocess_timeout,
         )
         output = process.stdout
+        if selected_interface != "auto":
+            # Recheck after ping too, so unplugging an adapter during the
+            # measurement is not misreported as ordinary packet loss.
+            validate_network_interface(selected_interface)
     except FileNotFoundError:
         raise HTTPException(
             status_code=503,
@@ -916,6 +920,8 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT, interface=None):
             validate_network_interface(selected_interface)
         raise HTTPException(status_code=504, detail="Ping measurement timed out.")
     except Exception as error:
+        if selected_interface != "auto":
+            validate_network_interface(selected_interface)
         raise HTTPException(
             status_code=500, detail=f"Ping measurement failed: {error}"
         )
