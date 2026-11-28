@@ -360,6 +360,71 @@ describe("Diagnostic JSON Export", () => {
         assert.deepEqual(revokedUrls, ["blob:test-0"]);
     });
 
+    it("preserves the previous completed diagnostic when the next diagnostic fails", async () => {
+        const {
+            context,
+            downloads
+        } = createExportTestContext();
+
+        const successfulMetrics = {
+            download: 100,
+            upload: 50,
+            ping: 20,
+            jitter: 5,
+            packetLoss: 0,
+            score: 95,
+            networkType: "Wi-Fi"
+        };
+
+        const successfulTimestamp = "2026-11-27T06:00:00.000Z";
+
+        const failedMetrics = {
+            download: 0,
+            upload: 0,
+            ping: 0,
+            jitter: 0,
+            packetLoss: 100,
+            score: 0,
+            networkType: "Wi-Fi"
+        };
+
+        // Store the previous successful diagnostic.
+        context.preserveLastCompletedDiagnostic(
+            { state: "success" },
+            successfulMetrics,
+            successfulTimestamp
+        );
+
+        // A failed diagnostic must not overwrite the previous one.
+        context.preserveLastCompletedDiagnostic(
+            { state: "error" },
+            failedMetrics,
+            "2026-11-27T06:10:00.000Z"
+        );
+
+        // Export should still contain the previous successful diagnostic.
+        context.exportDiagnosticToJSON();
+
+        const blobEntry = downloads.find(entry => entry.blob);
+
+        assert.ok(blobEntry, "Expected a JSON Blob to be created");
+
+        const exportedReport = JSON.parse(await blobEntry.blob.text());
+
+        assert.equal(
+            exportedReport.diagnostic.timestamp,
+            successfulTimestamp
+        );
+
+        assert.equal(exportedReport.metrics.download_mbps, 100);
+        assert.equal(exportedReport.metrics.upload_mbps, 50);
+        assert.equal(exportedReport.metrics.ping_ms, 20);
+        assert.equal(exportedReport.metrics.jitter_ms, 5);
+        assert.equal(exportedReport.metrics.connectivity_score, 95);
+        assert.equal(exportedReport.metrics.packet_loss_percent, 0);
+        assert.equal(exportedReport.diagnostic.network_type, "Wi-Fi");
+    });
+
     it("does not export when no completed diagnostic exists", () => {
         const {
             context,

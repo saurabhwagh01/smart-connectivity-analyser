@@ -1666,12 +1666,13 @@ async function startNetworkTest() {
         // Do not save an empty record when every check failed.
         if (outcome?.state !== "error") {
             await saveNetworkTest(entry);
-
-            lastCompletedDiagnostic = {
-                ...currentMetrics,
-                timestamp: lastTestTime
-            };
+            preserveLastCompletedDiagnostic(
+                outcome,
+                 currentMetrics,
+                 lastTestTime
+            );
         }
+
 
         setText("testMessage", describeOutcome(profile, outcome));
 
@@ -1713,6 +1714,13 @@ async function startNetworkTest() {
             updateNetworkStatus();
         }
     }
+}
+function preserveLastCompletedDiagnostic(outcome, metrics, timestamp) {
+    if (outcome?.state === "error") return;
+    lastCompletedDiagnostic = {
+        ...metrics,
+        timestamp
+    };
 }
 /* =========================================================
    DIAGNOSTIC PROFILES
@@ -2467,10 +2475,8 @@ function updateDashboard() {
             "Your device is offline. Connect to a network first."
         );
     }
-
     updateSessionStatistics();
 }
-
 /* =========================================================
    APPLICATION READINESS
    ========================================================= */
