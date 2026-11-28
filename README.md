@@ -41,6 +41,7 @@ Internet connectivity can vary because of network congestion, signal conditions,
 - 🗄️ **Data Persistence:** Store supported network test records in an SQLite database.
 - ⚡ **REST API:** Access network measurements, history, prediction, and anomaly analysis through FastAPI endpoints.
 - ♿ **Accessibility:** Use the dashboard with a keyboard, labelled controls, visible focus indicators, accessible charts and progress indicators, and screen-reader announcements for status and error messages.
+- 📡 **Live diagnostic progress:** Follow the real status of ping, DNS, bandwidth and IPv4/IPv6 checks. See [diagnostic progress and streaming behaviour](docs/diagnostic-progress.md) for the event contract and fallback.
 
 > **AI limitations:** Prediction and anomaly detection are experimental. Their performance must be evaluated on suitable test data. Anomaly detection requires validation against labelled normal and anomalous examples. Results may be unavailable when there are not enough complete records.
 

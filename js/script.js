@@ -14,6 +14,14 @@ let applicationInitialized = false;
 let testInProgress = false;
 let speedTest = null;
 let speedTestTimeout = null;
+let activeSpeedTestFinish = null;
+let activeDiagnosticEventSource = null;
+let activeDiagnosticStreamAbort = null;
+const activeDiagnosticAbortControllers = new Set();
+let activeDiagnosticCancelled = false;
+let activeDiagnosticCancellationPromise = null;
+let activeDiagnosticCancelReject = null;
+let diagnosticProgressState = { stages: {} };
 let networkChart = null;
 let forecastChart = null;
 let latestForecastData = null;
@@ -186,6 +194,7 @@ async function initializeApplication() {
 
 function setupButtons() {
     $("startTest")?.addEventListener("click", startNetworkTest);
+    $("cancelNetworkTest")?.addEventListener("click", cancelNetworkTest);
 
     $("exportCSV")?.addEventListener(
         "click",
@@ -1582,6 +1591,158 @@ function updateChartDescription(items) {
    NETWORK TEST
    ========================================================= */
 
+const DIAGNOSTIC_STAGE_ORDER = [
+    "DNS",
+    "Ping",
+    "Download + upload",
+    "IPv4/IPv6"
+];
+
+function createDiagnosticProgressState() {
+    return { stages: {} };
+}
+
+function reduceDiagnosticProgress(state = createDiagnosticProgressState(), event = {}) {
+    if (!event || typeof event.stage !== "string" || !event.stage.trim()) return state;
+    const validStatuses = new Set(["started", "completed", "failed", "partial", "cancelled"]);
+    if (!validStatuses.has(event.status)) return state;
+
+    const stages = { ...state.stages };
+    stages[event.stage] = event.status;
+    return { stages };
+}
+
+function formatDiagnosticProgress(state = createDiagnosticProgressState()) {
+    const names = [
+        ...DIAGNOSTIC_STAGE_ORDER.filter((name) => Object.hasOwn(state.stages, name)),
+        ...Object.keys(state.stages).filter((name) => !DIAGNOSTIC_STAGE_ORDER.includes(name))
+    ];
+    const entries = names.map((name) => [name, state.stages[name]]);
+    if (!entries.length) return "Preparing diagnostics…";
+
+    const running = entries.filter(([, status]) => status === "started").map(([name]) => name);
+    const completed = entries.filter(([, status]) => status === "completed").map(([name]) => name);
+    const partial = entries.filter(([, status]) => status === "partial").map(([name]) => name);
+    const failed = entries.filter(([, status]) => status === "failed").map(([name]) => name);
+    const cancelled = entries.filter(([, status]) => status === "cancelled").map(([name]) => name);
+
+    const parts = [];
+    if (running.length) parts.push(`Running: ${running.join(", ")}.`);
+    if (completed.length) parts.push(`Completed: ${completed.join(", ")}.`);
+    if (partial.length) parts.push(`Partial: ${partial.join(", ")}.`);
+    if (failed.length) parts.push(`Failed: ${failed.join(", ")}.`);
+    if (cancelled.length) parts.push(`Cancelled: ${cancelled.join(", ")}.`);
+    return parts.join(" ");
+}
+
+function renderDiagnosticProgress() {
+    const summary = $("diagnosticProgressSummary");
+    const list = $("diagnosticProgressStages");
+    if (summary) summary.textContent = formatDiagnosticProgress(diagnosticProgressState);
+    if (!list || typeof document === "undefined") return;
+
+    list.replaceChildren();
+    const stages = diagnosticProgressState.stages;
+    const names = [
+        ...DIAGNOSTIC_STAGE_ORDER.filter((name) => Object.hasOwn(stages, name)),
+        ...Object.keys(stages).filter((name) => !DIAGNOSTIC_STAGE_ORDER.includes(name))
+    ];
+    const statusLabels = {
+        started: "Running",
+        completed: "Complete",
+        partial: "Partially complete",
+        failed: "Failed",
+        cancelled: "Cancelled"
+    };
+
+    names.forEach((name) => {
+        const item = document.createElement("li");
+        const label = document.createElement("span");
+        const status = document.createElement("span");
+        label.textContent = name;
+        status.textContent = statusLabels[stages[name]] || "Pending";
+        item.className = "flex items-center justify-between gap-3 text-xs";
+        status.className = "font-medium text-slate-600";
+        item.append(label, status);
+        list.append(item);
+    });
+}
+
+function updateDiagnosticProgress(stage, status) {
+    diagnosticProgressState = reduceDiagnosticProgress(diagnosticProgressState, { stage, status });
+    renderDiagnosticProgress();
+}
+
+function beginDiagnosticProgress() {
+    diagnosticProgressState = createDiagnosticProgressState();
+    const panel = $("diagnosticProgress");
+    const cancel = $("cancelNetworkTest");
+    if (panel) panel.hidden = false;
+    if (cancel) cancel.hidden = false;
+    renderDiagnosticProgress();
+}
+
+function cancelRunningProgressStages() {
+    for (const [stage, status] of Object.entries(diagnosticProgressState.stages)) {
+        if (status === "started") {
+            diagnosticProgressState = reduceDiagnosticProgress(diagnosticProgressState, {
+                stage,
+                status: "cancelled"
+            });
+        }
+    }
+    renderDiagnosticProgress();
+}
+
+async function runTrackedDiagnosticStage(stage, run, evaluateStatus) {
+    updateDiagnosticProgress(stage, "started");
+    try {
+        const result = await Promise.race([
+            Promise.resolve().then(run),
+            activeDiagnosticCancellationPromise
+        ]);
+        if (activeDiagnosticCancelled) {
+            updateDiagnosticProgress(stage, "cancelled");
+            return result;
+        }
+        const status = evaluateStatus
+            ? evaluateStatus(result)
+            : result === null || result === undefined ? "failed" : "completed";
+        updateDiagnosticProgress(stage, status);
+        return result;
+    } catch (error) {
+        updateDiagnosticProgress(stage, activeDiagnosticCancelled ? "cancelled" : "failed");
+        if (!activeDiagnosticCancelled) {
+            console.warn(`${stage} diagnostic failed:`, error.message);
+        }
+        return null;
+    }
+}
+
+function cancelNetworkTest() {
+    if (!testInProgress) return;
+    activeDiagnosticCancelled = true;
+    activeDiagnosticCancelReject?.(new Error("Diagnostic cancelled."));
+
+    if (activeDiagnosticStreamAbort) activeDiagnosticStreamAbort();
+    if (activeDiagnosticEventSource) {
+        activeDiagnosticEventSource.close();
+        activeDiagnosticEventSource = null;
+    }
+    activeDiagnosticAbortControllers.forEach((controller) => controller.abort());
+    activeDiagnosticAbortControllers.clear();
+
+    try {
+        speedTest?.pause?.();
+    } catch (_) {
+        // The speed-test library may already have stopped.
+    }
+    activeSpeedTestFinish?.({ download: null, upload: null });
+    cancelRunningProgressStages();
+    setText("testMessage", "Diagnostic cancelled. Completed checks are kept above; unfinished checks were stopped.");
+    showToast("Diagnostic cancelled.");
+}
+
 function abortTestIfOffline() {
     if (!isDeviceOffline()) return false;
 
@@ -1614,6 +1775,11 @@ async function startNetworkTest() {
     }
 
     testInProgress = true;
+    activeDiagnosticCancelled = false;
+    activeDiagnosticCancellationPromise = new Promise((_, reject) => {
+        activeDiagnosticCancelReject = reject;
+    });
+    beginDiagnosticProgress();
     metricsRestoredFromHistory = false;
     offlineClearedMetrics = false;
 
@@ -1653,22 +1819,44 @@ async function startNetworkTest() {
     updateDashboard();
 
     try {
-        void runBackendDnsCheck()
-            .then((dnsResult) => {
-                setText("dnsStatus", formatDnsStatus(dnsResult));
-            })
-            .catch(() => {
-                setText("dnsStatus", formatDnsStatus(null));
-            });
+        const dnsPromise = runTrackedDiagnosticStage(
+            "DNS",
+            runBackendDnsCheck
+        ).then((dnsResult) => {
+            setText("dnsStatus", formatDnsStatus(dnsResult));
+            return dnsResult;
+        });
 
-        const [backendResult, bandwidthResult, protocolResult] =
+        const bandwidthPromise = runsBandwidth
+            ? runTrackedDiagnosticStage(
+                "Download + upload",
+                runCloudflareBandwidthTest,
+                (result) => {
+                    const hasDownload = isValidMetric(result?.download);
+                    const hasUpload = isValidMetric(result?.upload);
+                    return hasDownload && hasUpload
+                        ? "completed"
+                        : hasDownload || hasUpload
+                            ? "partial"
+                            : "failed";
+                }
+            )
+            : Promise.resolve(null);
+
+        const protocolPromise = runTrackedDiagnosticStage(
+            "IPv4/IPv6",
+            runNetworkProtocolTest
+        );
+
+        const [dnsResult, backendResult, bandwidthResult, protocolResult] =
             await Promise.all([
+                dnsPromise,
                 runBackendNetworkQualityTest(profile?.id ?? null),
-                runsBandwidth
-                    ? runCloudflareBandwidthTest()
-                    : Promise.resolve(null),
-                runNetworkProtocolTest()
+                bandwidthPromise,
+                protocolPromise
             ]);
+
+        if (activeDiagnosticCancelled) return;
 
 
 
@@ -1761,16 +1949,28 @@ async function startNetworkTest() {
         );
 
     } catch (error) {
-        console.error("Network test failed:", error);
+        if (!activeDiagnosticCancelled) {
+            console.error("Network test failed:", error);
 
-        setText(
-            "testMessage",
-            "Network test failed. Check that the backend server is running and you are connected to the internet, then try again."
-        );
+            setText(
+                "testMessage",
+                "Network test failed. Check that the backend server is running and you are connected to the internet, then try again."
+            );
 
-        showToast("Network test failed.");
+            showToast("Network test failed.");
+        }
 
     } finally {
+        if (activeDiagnosticCancelled) cancelRunningProgressStages();
+        const cancelButton = $("cancelNetworkTest");
+        if (cancelButton) cancelButton.hidden = true;
+        if (activeDiagnosticEventSource) {
+            activeDiagnosticEventSource.close();
+            activeDiagnosticEventSource = null;
+        }
+        activeDiagnosticStreamAbort = null;
+        activeDiagnosticCancellationPromise = null;
+        activeDiagnosticCancelReject = null;
         testInProgress = false;
 
         setStartButtonBusy(button, false);
@@ -2036,60 +2236,201 @@ function describeOutcome(profile, outcome) {
    BACKEND NETWORK QUALITY
    ========================================================= */
 
+function buildNetworkQualityStreamUrl(apiBase, profileId = null) {
+    const base = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
+    const params = new URLSearchParams();
+    if (profileId) params.set("profile", profileId);
+    const query = params.toString();
+    return `${base}/network-quality/stream${query ? `?${query}` : ""}`;
+}
+
+function buildNetworkQualityJsonUrl(apiBase, profileId = null) {
+    const base = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
+    const query = profileId ? `?profile=${encodeURIComponent(profileId)}` : "";
+    return `${base}/network-quality${query}`;
+}
+
+async function fetchNetworkQualityJson(profileId = null, fetchImpl = fetch) {
+    const controller = new AbortController();
+    activeDiagnosticAbortControllers.add(controller);
+    try {
+        const response = await fetchImpl(buildNetworkQualityJsonUrl(API_BASE, profileId), {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            const detail = await readApiError(response);
+            throw new Error(detail || `Network quality API returned ${response.status}`);
+        }
+        const data = await response.json();
+        return data.metrics || data.data || data;
+    } finally {
+        activeDiagnosticAbortControllers.delete(controller);
+    }
+}
+
+function requestNetworkQualityWithProgress(
+    profileId = null,
+    { EventSourceImpl = globalThis.EventSource, fetchImpl = fetch, onProgress = () => {} } = {}
+) {
+    if (typeof EventSourceImpl !== "function") {
+        return fetchNetworkQualityJson(profileId, fetchImpl);
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let fallbackStarted = false;
+        let streamResult;
+        let hasStreamResult = false;
+        let source;
+        const clearActive = () => {
+            if (activeDiagnosticEventSource === source) activeDiagnosticEventSource = null;
+            if (activeDiagnosticStreamAbort === abort) activeDiagnosticStreamAbort = null;
+        };
+        const close = () => {
+            try { source?.close(); } catch (_) {}
+            clearActive();
+        };
+        const finish = (error, result) => {
+            if (settled) return;
+            settled = true;
+            close();
+            if (error) reject(error);
+            else resolve(result);
+        };
+        const abort = () => finish(new Error("Diagnostic cancelled."));
+        const fallback = async () => {
+            if (settled || fallbackStarted) return;
+            fallbackStarted = true;
+            close();
+            try {
+                const result = await fetchNetworkQualityJson(profileId, fetchImpl);
+                if (!settled) {
+                    settled = true;
+                    resolve(result);
+                }
+            } catch (error) {
+                if (!settled) {
+                    settled = true;
+                    reject(error);
+                }
+            }
+        };
+
+        try {
+            source = new EventSourceImpl(buildNetworkQualityStreamUrl(API_BASE, profileId));
+            activeDiagnosticEventSource = source;
+            activeDiagnosticStreamAbort = abort;
+
+            source.addEventListener("progress", (event) => {
+                try {
+                    const progress = JSON.parse(event.data);
+                    onProgress(progress.stage, progress.status, progress);
+                } catch (_) {
+                    // Ignore malformed progress records; the result event remains authoritative.
+                }
+            });
+            source.addEventListener("result", (event) => {
+                try {
+                    const result = JSON.parse(event.data);
+                    streamResult = result.metrics || result.data || result;
+                    hasStreamResult = true;
+                } catch (_) {
+                    finish(new Error("The diagnostic stream returned an invalid result."));
+                }
+            });
+            source.addEventListener("done", (event) => {
+                try {
+                    const done = JSON.parse(event.data);
+                    if (done.status === "completed" && hasStreamResult) {
+                        finish(null, streamResult);
+                    } else {
+                        finish(new Error("The diagnostic stream ended without a result."));
+                    }
+                } catch (_) {
+                    finish(new Error("The diagnostic stream returned an invalid completion event."));
+                }
+            });
+            source.addEventListener("failure", (event) => {
+                if (typeof event.data !== "string") return; // Native EventSource transport error.
+                try {
+                    const payload = JSON.parse(event.data);
+                    const detail = typeof payload.detail === "string"
+                        ? payload.detail
+                        : payload.detail?.error || "Network diagnostic failed.";
+                    finish(new Error(detail));
+                } catch (_) {
+                    finish(new Error("Network diagnostic failed."));
+                }
+            });
+            source.onerror = () => {
+                // If the result arrived but the closing event was interrupted, keep that result.
+                if (hasStreamResult) {
+                    finish(null, streamResult);
+                    return;
+                }
+                // A stream that cannot connect or drops mid-run falls back to the legacy JSON endpoint.
+                void fallback();
+            };
+        } catch (_) {
+            void fallback();
+        }
+    });
+}
+
 async function runBackendNetworkQualityTest(profileId = null) {
     lastBackendError = null;
+    updateDiagnosticProgress("Ping", "started");
 
     try {
-        const query = profileId
-            ? `?profile=${encodeURIComponent(profileId)}`
-            : "";
-
-        const response = await fetch(
-            `${API_BASE}/network-quality${query}`,
-            {
-                method: "GET",
-                cache: "no-store"
+        const data = await requestNetworkQualityWithProgress(profileId, {
+            onProgress: (stage, status) => {
+                if (stage === "ping") {
+                    updateDiagnosticProgress("Ping", status);
+                }
             }
-        );
-
-        if (!response.ok) {
-            lastBackendError = await readApiError(response);
-            throw new Error(
-                `Network quality API returned ${response.status}`
-            );
+        });
+        if (activeDiagnosticCancelled) {
+            updateDiagnosticProgress("Ping", "cancelled");
+            return null;
         }
-
-        const data = await response.json();
-
+        updateDiagnosticProgress("Ping", "completed");
         console.log("Backend network quality:", data);
-
-        return data.metrics || data.data || data;
-
+        return data;
     } catch (error) {
-        console.warn(
-            "Backend network-quality endpoint unavailable:",
-            error.message
-        );
-
-        lastBackendError = lastBackendError || error.message;
-
+        if (!activeDiagnosticCancelled) {
+            lastBackendError = error.message || "Network quality diagnostic failed.";
+            updateDiagnosticProgress("Ping", "failed");
+            console.warn("Backend network-quality endpoint unavailable:", lastBackendError);
+        } else {
+            updateDiagnosticProgress("Ping", "cancelled");
+        }
         return null;
     }
 }
 
 async function runBackendDnsCheck() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    activeDiagnosticAbortControllers.add(controller);
     try {
         const response = await fetch(
             `${API_BASE}/dns-check`,
-            { method: "GET", cache: "no-store" }
+            { method: "GET", cache: "no-store", signal: controller.signal }
         );
         if (!response.ok) {
             throw new Error(`DNS check API returned ${response.status}`);
         }
         return await response.json();
     } catch (error) {
-        console.warn("Backend DNS check unavailable:", error.message);
+        if (!activeDiagnosticCancelled) {
+            console.warn("Backend DNS check unavailable:", error.message);
+        }
         return null;
+    } finally {
+        clearTimeout(timeout);
+        activeDiagnosticAbortControllers.delete(controller);
     }
 }
 
@@ -2118,6 +2459,7 @@ function formatDnsStatus(result) {
 } async function runNetworkProtocolTest() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
+    activeDiagnosticAbortControllers.add(controller);
     try {
         const response = await fetch(
             `${API_BASE}/network-protocols`,
@@ -2134,10 +2476,13 @@ function formatDnsStatus(result) {
 
         return await response.json();
     } catch (error) {
-        console.warn("Network protocol endpoint unavailable:", error.message);
+        if (!activeDiagnosticCancelled) {
+            console.warn("Network protocol endpoint unavailable:", error.message);
+        }
         return null;
     } finally {
         clearTimeout(timeout);
+        activeDiagnosticAbortControllers.delete(controller);
     }
 }
 
@@ -2224,6 +2569,9 @@ async function runCloudflareBandwidthTest() {
         const module = await import(
             "https://cdn.skypack.dev/@cloudflare/speedtest"
         );
+        if (activeDiagnosticCancelled) {
+            return { download: null, upload: null };
+        }
 
         const SpeedTest = module.default;
 
@@ -2278,11 +2626,12 @@ async function runCloudflareBandwidthTest() {
                 if (completed) return;
 
                 completed = true;
-
+                activeSpeedTestFinish = null;
                 clearTimeout(speedTestTimeout);
 
                 resolve(result);
             };
+            activeSpeedTestFinish = finish;
 
             test.onResultsChange = ({ type } = {}) => {
                 try {
@@ -3633,6 +3982,12 @@ if (typeof module !== "undefined" && module.exports) {
         formatMetric,
         formatNetworkMetric,
         validateHistoryFilterValues,
+        createDiagnosticProgressState,
+        reduceDiagnosticProgress,
+        formatDiagnosticProgress,
+        buildNetworkQualityStreamUrl,
+        buildNetworkQualityJsonUrl,
+        requestNetworkQualityWithProgress,
         evaluateProfileResult,
         loadDiagnosticProfiles,
         selectDiagnosticProfile,
