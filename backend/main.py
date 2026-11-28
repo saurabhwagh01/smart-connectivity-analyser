@@ -41,6 +41,8 @@ import sqlite3
 from contextlib import closing, contextmanager
 import json
 import logging
+
+logger = logging.getLogger(__name__)
 import math
 import sys
 
@@ -970,7 +972,7 @@ async def diagnostic_progress_events(request, profile_id=None):
             "status": "failed",
             "completed": [],
         })
-        yield encode_sse_event("error", {
+        yield encode_sse_event("failure", {
             "status_code": error.status_code,
             "detail": error.detail,
         })
@@ -987,7 +989,7 @@ async def diagnostic_progress_events(request, profile_id=None):
             "status": "failed",
             "completed": [],
         })
-        yield encode_sse_event("error", {
+        yield encode_sse_event("failure", {
             "status_code": 500,
             "detail": "Network diagnostic failed.",
         })
