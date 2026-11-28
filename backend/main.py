@@ -923,14 +923,14 @@ async def measure_ping_async(packet_count=DEFAULT_PACKET_COUNT):
 def encode_sse_event(event, payload):
     """Encode one named server-sent event using the browser EventSource format."""
     return (
-        f"event: {event}\\n"
-        f"data: {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}\\n\\n"
+        f"event: {event}\n"
+        f"data: {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}\n\n"
     )
 
 
 async def diagnostic_progress_events(request, profile_id=None):
     """Yield truthful progress for the backend ping and cancel it on disconnect."""
-    yield "retry: 0\\n\\n"
+    yield "retry: 0\n\n"
     profile = get_profile(profile_id) if profile_id else None
     packet_count = profile.packet_count if profile else DEFAULT_PACKET_COUNT
 
@@ -952,7 +952,7 @@ async def diagnostic_progress_events(request, profile_id=None):
 
             now = asyncio.get_running_loop().time()
             if now - last_heartbeat >= 5:
-                yield ": keep-alive\\n\\n"
+                yield ": keep-alive\n\n"
                 last_heartbeat = now
 
         ping_result = task.result()
