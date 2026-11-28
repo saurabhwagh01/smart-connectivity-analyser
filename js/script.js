@@ -1611,7 +1611,11 @@ function reduceDiagnosticProgress(state = createDiagnosticProgressState(), event
 }
 
 function formatDiagnosticProgress(state = createDiagnosticProgressState()) {
-    const entries = Object.entries(state.stages);
+    const names = [
+        ...DIAGNOSTIC_STAGE_ORDER.filter((name) => Object.hasOwn(state.stages, name)),
+        ...Object.keys(state.stages).filter((name) => !DIAGNOSTIC_STAGE_ORDER.includes(name))
+    ];
+    const entries = names.map((name) => [name, state.stages[name]]);
     if (!entries.length) return "Preparing diagnostics…";
 
     const running = entries.filter(([, status]) => status === "started").map(([name]) => name);
