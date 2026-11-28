@@ -774,3 +774,145 @@ select.control-btn {
 .check-badge[data-status="failed"] { background: #ffe4e6; color: #9f1239; }
 
 @media (prefers-reduced-motion: reduce) { .profile-card { transition: none; } .profile-card:hover { transform: none; } }
+
+/* ===== Connectivity Forecast ===== */
+.forecast-card {
+  container-type: inline-size;
+}
+
+.forecast-horizons {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@container (min-width: 600px) {
+  .forecast-horizons {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@supports not (container-type: inline-size) {
+  @media (min-width: 640px) {
+    .forecast-horizons {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+}
+
+.forecast-horizon-card {
+  border: 1px solid rgba(139, 92, 246, 0.16);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.58);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.forecast-horizon-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.forecast-horizon-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #1e1b4b;
+}
+
+.forecast-horizon-score {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #312e81;
+  line-height: 1.15;
+}
+
+.forecast-horizon-range {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #475569;
+}
+
+.forecast-horizon-metrics {
+  margin: 0.25rem 0 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 0.6rem;
+  font-size: 0.74rem;
+  color: #334155;
+}
+
+.forecast-horizon-metrics dt {
+  font-weight: 600;
+  color: #475569;
+}
+
+.forecast-horizon-metrics dd {
+  margin: 0;
+  font-weight: 700;
+  text-align: right;
+  color: #1e1b4b;
+}
+
+.forecast-risk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.forecast-risk-badge[data-risk="low"] {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.forecast-risk-badge[data-risk="moderate"] {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.forecast-risk-badge[data-risk="high"] {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.forecast-risk-badge[data-risk="unavailable"],
+.forecast-risk-badge[data-risk="insufficient"] {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.forecast-chart-container {
+  height: 260px;
+  min-height: 220px;
+}
+
+#forecastChart {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.forecast-chart-container[hidden],
+.forecast-reasons[hidden] {
+  display: none;
+}
+
+@media (forced-colors: active) {
+  .forecast-risk-badge,
+  .forecast-horizon-card {
+    border: 1px solid CanvasText;
+  }
+}

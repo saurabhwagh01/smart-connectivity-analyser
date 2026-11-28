@@ -24,6 +24,10 @@ from backend.diagnostic_profiles import (
     get_profile,
     list_profiles,
 )
+from backend.forecasting import (
+    generate_connectivity_forecast,
+    parse_horizons,
+)
 from backend.timestamps import (
     current_utc_timestamp,
     to_canonical_utc,
@@ -1331,6 +1335,59 @@ def ai_analyze():
         "prediction": ai_prediction(),
         "anomaly": ai_anomaly(),
     }
+
+
+# ============================================================
+# MULTI-HORIZON CONNECTIVITY FORECAST
+# ============================================================
+
+
+@app.get("/api/predict/forecast")
+def predict_forecast(
+    horizons: str | None = Query(
+        default=None,
+        description="Comma-separated forecast horizons (e.g. 1h,6h,24h)",
+    ),
+):
+    try:
+        parsed_horizons = parse_horizons(horizons)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        connection = get_connection()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to connect to database: {exc}",
+        )
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT
+                timestamp,
+                download_mbps,
+                upload_mbps,
+                ping_ms,
+                jitter_ms,
+                packet_loss,
+                connectivity_score
+            FROM network_tests
+            """
+            + HISTORY_ORDER_BY
+        )
+        records = [dict(row) for row in cursor.fetchall()]
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database query error: {exc}",
+        )
+    finally:
+        connection.close()
+
+    return generate_connectivity_forecast(records, horizons=parsed_horizons)
 
 
 # ============================================================
