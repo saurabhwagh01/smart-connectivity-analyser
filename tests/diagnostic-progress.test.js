@@ -85,6 +85,7 @@ test("EventSource progress is consumed and the streamed result resolves", async 
     instance.emit("progress", { stage: "ping", status: "completed", completed: ["ping"] });
     const result = { ping_ms: 14.2, packet_loss: 0 };
     instance.emit("result", result);
+    instance.emit("done", { status: "completed" });
 
     assert.deepEqual(await resultPromise, result);
     assert.equal(instance.closed, true);
