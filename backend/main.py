@@ -41,7 +41,16 @@ from contextlib import closing, contextmanager
 import json
 import logging
 import math
+import ipaddress
+import socket
 import sys
+
+try:
+    import psutil
+except ImportError:  # Keep automatic diagnostics available without the optional metadata provider.
+    psutil = None
+
+logger = logging.getLogger(__name__)
 
 import platform
 import subprocess
@@ -732,13 +741,116 @@ def parse_ping_output(output):
     return ping_times, packet_loss
 
 
-def build_ping_command(target, packet_count, timeout_seconds, system):
-    """Return the ping command for the given operating system.
+# ============================================================
+# NETWORK INTERFACE DISCOVERY AND VALIDATION
+# ============================================================
 
-    system is a platform.system() value: "Windows", "Linux" or
-    "Darwin" (macOS). The target goes last, because macOS stops
-    reading options at the first non-option argument.
+def _has_usable_ipv4(addresses):
+    """The ping diagnostic targets IPv4, so only IPv4-capable adapters are selectable."""
+    for address in addresses:
+        if address.family != socket.AF_INET:
+            continue
+        try:
+            parsed = ipaddress.ip_address(address.address)
+        except (ValueError, TypeError):
+            continue
+        if not parsed.is_loopback and not parsed.is_unspecified and not parsed.is_link_local:
+            return True
+    return False
+
+
+def discover_network_interfaces():
+    """Return interface names and link state only where ping can bind reliably.
+
+    Linux iputils supports binding by interface name (-I); Apple's ping has
+    the bound-interface option (-b). Windows ping's -S source-address option
+    is IPv6-only, while this endpoint measures an IPv4 target, so Windows
+    deliberately remains in automatic mode.
     """
+    automatic = {
+        "id": "auto",
+        "name": "Automatic (System default)",
+        "status": "active",
+        "is_default": True,
+    }
+    system = platform.system()
+    if system not in {"Linux", "Darwin"} or psutil is None:
+        return {"supported": False, "interfaces": [automatic], "selected": "auto"}
+
+    try:
+        stats = psutil.net_if_stats()
+        addresses = psutil.net_if_addrs()
+        interfaces = [automatic]
+
+        for name, adapter_addresses in addresses.items():
+            if not name or name.lower() in {"lo", "lo0", "loopback"}:
+                continue
+            if not _has_usable_ipv4(adapter_addresses):
+                continue
+
+            adapter_stats = stats.get(name)
+            if adapter_stats is None:
+                continue
+
+            interfaces.append({
+                "id": name,
+                "name": name,
+                "status": "connected" if adapter_stats.isup else "disconnected",
+                "is_default": False,
+            })
+
+        return {"supported": True, "interfaces": interfaces, "selected": "auto"}
+    except Exception:
+        logger.exception("Network interface discovery failed")
+        return {"supported": False, "interfaces": [automatic], "selected": "auto"}
+
+
+def validate_network_interface(interface_name=None):
+    """Return 'auto' or a currently-up, IPv4-capable interface identifier.
+
+    The discovery snapshot is refreshed for every diagnostic request. That
+    catches adapters removed or disconnected after the picker was populated.
+    """
+    if interface_name is None or str(interface_name).strip().lower() in {"", "auto", "default"}:
+        return "auto"
+
+    requested = str(interface_name).strip()
+    discovery = discover_network_interfaces()
+    if not discovery.get("supported"):
+        raise HTTPException(
+            status_code=400,
+            detail="Selecting a network interface is not supported on this platform. Omit the interface parameter to use automatic routing.",
+        )
+
+    match = next(
+        (item for item in discovery.get("interfaces", []) if item.get("id") == requested),
+        None,
+    )
+    if match is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Network interface '{requested}' is no longer available. Refresh the interface list or use Automatic (System default).",
+        )
+    if match.get("status") != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Network interface '{requested}' is disconnected. Reconnect it or use Automatic (System default).",
+        )
+    return match["id"]
+
+
+@app.get("/api/network-interfaces")
+def get_network_interfaces():
+    """List selectable adapters without returning IP or hardware addresses."""
+    return discover_network_interfaces()
+
+
+def build_ping_command(target, packet_count, timeout_seconds, system, interface=None):
+    """Build an IPv4 ping command, optionally bound to a supported interface."""
+    selected = interface not in (None, "", "auto", "default")
+    if selected and system not in {"Linux", "Darwin"}:
+        raise ValueError(f"Interface binding is not supported by this platform's IPv4 ping command: {system}")
+
     if system == "Windows":
         # -n: number of pings, -w: reply timeout in milliseconds.
         return [
@@ -749,31 +861,38 @@ def build_ping_command(target, packet_count, timeout_seconds, system):
         ]
 
     if system == "Darwin":
-        # -c: number of pings, -W: reply timeout in milliseconds.
-        return [
+        # Apple's -b binds the ping socket to the named interface.
+        command = [
             "ping",
             "-c", str(packet_count),
             "-W", str(timeout_seconds * 1000),
-            target,
         ]
+        if selected:
+            command.extend(["-b", interface])
+        command.append(target)
+        return command
 
-    # Linux and other Unix-like systems.
-    # -c: number of pings, -W: reply timeout in seconds.
-    return [
+    # Linux iputils -I accepts an interface name and binds the source route.
+    command = [
         "ping",
         "-c", str(packet_count),
         "-W", str(timeout_seconds),
-        target,
     ]
+    if selected:
+        command.extend(["-I", interface])
+    command.append(target)
+    return command
 
 
-def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
-    """Run the ping measurement. Raises HTTPException if ping cannot run."""
+def measure_ping(packet_count=DEFAULT_PACKET_COUNT, interface=None):
+    """Run ping on the requested adapter, rechecking it immediately beforehand."""
     target = "1.1.1.1"
     timeout_seconds = 2
+    selected_interface = validate_network_interface(interface)
 
     command = build_ping_command(
-        target, packet_count, timeout_seconds, platform.system()
+        target, packet_count, timeout_seconds, platform.system(),
+        interface=selected_interface,
     )
 
     # 10 packets keeps the original 30 s limit; longer runs scale up.
@@ -793,6 +912,8 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
             detail="The ping command is not available on this server.",
         )
     except subprocess.TimeoutExpired:
+        if selected_interface != "auto":
+            validate_network_interface(selected_interface)
         raise HTTPException(status_code=504, detail="Ping measurement timed out.")
     except Exception as error:
         raise HTTPException(
@@ -804,6 +925,10 @@ def measure_ping(packet_count=DEFAULT_PACKET_COUNT):
     # No replies and no loss summary means ping failed to run, which is
     # not the same as a real 100% packet loss.
     if not ping_times and packet_loss is None:
+        # Recheck after the OS command too: a device can disappear between
+        # the pre-flight validation and ping opening its socket.
+        if selected_interface != "auto":
+            validate_network_interface(selected_interface)
         reason = process.stderr.strip() or "ping produced no output"
         raise HTTPException(
             status_code=503, detail=f"Ping measurement failed: {reason}"
@@ -865,10 +990,13 @@ def get_diagnostic_profiles():
 
 
 @app.get("/api/network-quality")
-def network_quality(profile: str | None = Query(default=None)):
-    # No profile: exactly the original behaviour (backward compatible).
+def network_quality(
+    profile: str | None = Query(default=None),
+    interface: str | None = Query(default=None, max_length=128),
+):
+    # No profile and no interface: exactly the original behaviour.
     if profile is None:
-        return measure_ping(DEFAULT_PACKET_COUNT)
+        return measure_ping(DEFAULT_PACKET_COUNT, interface=interface)
 
     try:
         selected = get_profile(profile)
@@ -882,7 +1010,7 @@ def network_quality(profile: str | None = Query(default=None)):
             },
         )
 
-    return build_profile_result(selected, measure_ping(selected.packet_count))
+    return build_profile_result(selected, measure_ping(selected.packet_count, interface=interface))
 
 
 # ============================================================
