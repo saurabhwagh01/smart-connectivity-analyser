@@ -279,6 +279,8 @@ never shown as fresh results.
 
 The application includes a HistGradientBoosting-based prediction component that estimates connectivity quality from available network data. Predictions depend on the available training records and input completeness, so treat them as estimates rather than guaranteed future performance.
 
+The model is trained at startup and refreshed automatically when new complete records arrive. Each training run records a fingerprint of the complete, valid records it used. `GET /api/ai/prediction` retrains only when that data has changed, so it does not retrain on every request, and incomplete or invalid records never trigger a retrain. Concurrent requests share a single retrain. If retraining fails, or there are no longer enough records, the last successfully trained model keeps serving and is reported as stale. `/api/ai/status` and the `model_status` field of the prediction response show `stale`, `training_data_version`, `training_records` and `last_refresh_error`.
+
 ### Anomaly Detection
 
 The application includes a Transformer Autoencoder that reconstructs network measurements and calculates a reconstruction error. The error is compared with a configured threshold to flag potentially unusual records.

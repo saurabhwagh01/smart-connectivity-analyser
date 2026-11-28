@@ -1174,7 +1174,7 @@ def ai_status():
         "message": AI_MODELS_MESSAGE,
         "prediction_model": {
             "name": "HistGradientBoosting",
-            "loaded": FINAL_PREDICTOR_READY,
+            **prediction_model_status(),
         },
         "anomaly_model": {
             "name": "Transformer Autoencoder",
@@ -1189,9 +1189,56 @@ def ai_status():
 # AI PREDICTION - HISTGRADIENTBOOSTING
 # ============================================================
 
+def final_predictor_ready():
+    """Current readiness of the prediction model (it can change at runtime)."""
+
+    if final_predictor is None:
+        return False
+    return bool(getattr(final_predictor, "ready", FINAL_PREDICTOR_READY))
+
+
+def prediction_model_status(check_data=True):
+    """Readiness and training-data version details for the API."""
+
+    status = {"loaded": final_predictor_ready()}
+    if final_predictor is None or not hasattr(final_predictor, "status"):
+        return status
+
+    if check_data:
+        try:
+            final_predictor.check_staleness()
+        except sqlite3.Error:
+            logger.exception("Could not check prediction training data")
+
+    details = final_predictor.status()
+    status.update(
+        {
+            "stale": details["stale"],
+            "training_data_version": details["training_data_version"],
+            "training_records": details["training_records"],
+            "last_refresh_error": details["last_refresh_error"],
+        }
+    )
+    return status
+
+
 @app.get("/api/ai/prediction")
 def ai_prediction():
-    if not FINAL_PREDICTOR_READY:
+    model_refreshed = False
+    refresh = getattr(final_predictor, "refresh_if_stale", None)
+
+    if callable(refresh):
+        # Retrains only when eligible training data changed (issue #37).
+        try:
+            model_refreshed = refresh()
+        except sqlite3.Error:
+            logger.exception("Prediction model refresh failed")
+            raise HTTPException(
+                status_code=500,
+                detail="Could not refresh the prediction model.",
+            )
+
+    if not final_predictor_ready():
         raise HTTPException(
             status_code=503,
             detail=getattr(final_predictor, "message", AI_MODELS_MESSAGE),
@@ -1220,6 +1267,8 @@ def ai_prediction():
                 2,
             ),
             "predicted_quality": quality,
+            "model_refreshed": model_refreshed,
+            "model_status": prediction_model_status(check_data=False),
         }
 
     except Exception as error:
