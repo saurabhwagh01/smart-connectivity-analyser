@@ -93,6 +93,8 @@ describe("Network history item normalization for graphs", () => {
 
     test("maps all 5 metrics plus connectivity score correctly", () => {
         const raw = {
+            id: 42,
+            network_type: "Wi-Fi",
             timestamp: "2026-11-20T10:00:00.000Z",
             download_mbps: 45.2,
             upload_mbps: 15.6,
@@ -104,6 +106,8 @@ describe("Network history item normalization for graphs", () => {
 
         const item = normalizeHistoryItem(raw);
 
+        assert.equal(item.id, 42);
+        assert.equal(item.network_type, "Wi-Fi");
         assert.equal(item.timestamp, "2026-11-20T10:00:00.000Z");
         assert.equal(item.download_mbps, 45.2);
         assert.equal(item.upload_mbps, 15.6);
@@ -115,6 +119,7 @@ describe("Network history item normalization for graphs", () => {
 
     test("maps alternative property name aliases correctly", () => {
         const raw = {
+            id: "9",
             created_at: "2026-11-20T12:00:00.000Z",
             downloadSpeed: 50.0,
             uploadSpeed: 20.0,
@@ -126,6 +131,7 @@ describe("Network history item normalization for graphs", () => {
 
         const item = normalizeHistoryItem(raw);
 
+        assert.equal(item.id, 9);
         assert.equal(item.timestamp, "2026-11-20T12:00:00.000Z");
         assert.equal(item.download_mbps, 50.0);
         assert.equal(item.upload_mbps, 20.0);

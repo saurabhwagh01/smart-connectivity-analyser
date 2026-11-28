@@ -590,6 +590,45 @@
       </canvas>
     </div>
 
+    <section class="rounded-xl border border-slate-200 bg-white/45 p-4 space-y-3" aria-labelledby="historyManagementHeading">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h3 id="historyManagementHeading" class="font-bold text-sm">Local history controls</h3>
+          <p class="text-xs text-slate-500">Manage records stored in this device's SQLite database.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <label for="historyRetention" class="text-xs font-semibold text-slate-600">Keep history</label>
+          <select id="historyRetention" class="control-btn">
+            <option value="">Keep forever</option>
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+            <option value="180">180 days</option>
+            <option value="365">1 year</option>
+            <option value="730">2 years</option>
+            <option value="1825">5 years</option>
+            <option value="3650">10 years</option>
+          </select>
+        </div>
+      </div>
+      <p id="historyRetentionMessage" class="text-xs text-slate-600" role="status" aria-live="polite">Loading retention settings…</p>
+
+      <div class="flex flex-col sm:flex-row sm:items-center gap-3 border-t border-slate-200 pt-3">
+        <label class="flex items-center gap-2 text-xs font-semibold text-slate-600">
+          <input id="selectAllHistoryRecords" type="checkbox" class="rounded border-slate-300">
+          Select all records in this view
+        </label>
+        <span id="selectedHistoryCount" class="text-xs text-slate-500">0 selected</span>
+        <span class="flex-1"></span>
+        <button id="deleteSelectedHistory" type="button" class="control-btn" disabled>Delete selected</button>
+        <button id="deleteAllHistory" type="button" class="control-btn">Delete all local history</button>
+      </div>
+      <div id="historyRecordsList" class="max-h-80 overflow-y-auto space-y-2" aria-label="Selectable network history records">
+        <p class="text-xs text-slate-500 py-2">History records will appear here.</p>
+      </div>
+      <p class="text-[11px] text-slate-500">Deleting local records does not remove downloaded CSV files, backups, or information already sent to other services.</p>
+    </section>
+
   </section>
 
   <!-- SESSION STATISTICS -->

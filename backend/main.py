@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 
 from fastapi.encoders import jsonable_encoder
 
@@ -325,6 +325,12 @@ logger = logging.getLogger(__name__)
 HISTORY_READ_ERROR = "Could not load network history. Please try again later."
 HISTORY_SAVE_ERROR = "Could not save the network test. Please try again later."
 HISTORY_DELETE_ERROR = "Could not delete network history. Please try again later."
+HISTORY_RETENTION_READ_ERROR = "Could not load history retention settings. Please try again later."
+HISTORY_RETENTION_UPDATE_ERROR = "Could not update history retention settings. Please try again later."
+HISTORY_RETENTION_CLEANUP_ERROR = "Could not clean up expired network history."
+HISTORY_RETENTION_MAX_DAYS = 3650
+HISTORY_RETENTION_BATCH_SIZE = 250
+HISTORY_RETENTION_MAX_BATCHES = 4
 
 
 @contextmanager
@@ -417,6 +423,31 @@ def initialize_database():
     )
 
 
+
+    # Keep this index independent of application-registered SQLite
+    # functions: tools and legacy clients may open the database directly.
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_network_tests_timestamp_id
+        ON network_tests(timestamp, id)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS network_history_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            retention_days INTEGER CHECK (
+                retention_days IS NULL OR retention_days BETWEEN 1 AND 3650
+            )
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO network_history_settings (id, retention_days)
+        VALUES (1, NULL)
+        """
+    )
 
     connection.commit()
 
@@ -550,6 +581,33 @@ class NetworkTest(BaseModel):
 
 
 
+
+
+class DeleteSelectedHistoryRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=5000)
+
+    @field_validator("ids", mode="before")
+    @classmethod
+    def validate_ids(cls, value):
+        if not isinstance(value, list) or not value:
+            raise ValueError("ids must be a non-empty list of positive integers")
+        if any(
+            isinstance(record_id, bool)
+            or not isinstance(record_id, int)
+            or record_id <= 0
+            for record_id in value
+        ):
+            raise ValueError("ids must contain only positive integers")
+        return value
+
+
+class HistoryRetentionRequest(BaseModel):
+    retention_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=HISTORY_RETENTION_MAX_DAYS,
+        description="Number of days to keep local history, or null to keep it indefinitely.",
+    )
 
 
 # ============================================================
@@ -893,9 +951,62 @@ def network_quality(profile: str | None = Query(default=None)):
 
 
 
+def delete_expired_history_batch(connection, retention_days):
+    """Delete at most one bounded batch of records outside the configured retention window."""
+    if retention_days is None:
+        return 0
+
+    cutoff = to_canonical_utc(
+        (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    )
+    cursor = connection.execute(
+        """
+        DELETE FROM network_tests
+        WHERE id IN (
+            SELECT id
+            FROM network_tests
+            WHERE canonical_utc(timestamp) IS NOT NULL
+              AND canonical_utc(timestamp) < ?
+            ORDER BY canonical_utc(timestamp) ASC, id ASC
+            LIMIT ?
+        )
+        """,
+        (cutoff, HISTORY_RETENTION_BATCH_SIZE),
+    )
+    return max(cursor.rowcount, 0)
+
+
+def cleanup_expired_history():
+    """Run a bounded best-effort cleanup outside the request's response path."""
+    try:
+        with history_database(HISTORY_RETENTION_CLEANUP_ERROR) as connection:
+            row = connection.execute(
+                "SELECT retention_days FROM network_history_settings WHERE id = 1"
+            ).fetchone()
+            if row is None or row["retention_days"] is None:
+                return 0
+
+            total_deleted = 0
+            for _ in range(HISTORY_RETENTION_MAX_BATCHES):
+                deleted = delete_expired_history_batch(
+                    connection, int(row["retention_days"])
+                )
+                connection.commit()
+                total_deleted += deleted
+                if deleted < HISTORY_RETENTION_BATCH_SIZE:
+                    break
+            return total_deleted
+    except HTTPException:
+        # The request has already completed. The database context logged the
+        # underlying SQLite exception; do not turn background cleanup into
+        # a false success response or crash the ASGI worker.
+        logger.error("Scheduled network history retention cleanup failed.")
+        return 0
+
+
 @app.post("/api/network-test")
 
-def save_network_test(data: NetworkTest):
+def save_network_test(data: NetworkTest, background_tasks: BackgroundTasks):
 
 
 
@@ -944,6 +1055,8 @@ def save_network_test(data: NetworkTest):
         )
         connection.commit()
         test_id = cursor.lastrowid
+
+    background_tasks.add_task(cleanup_expired_history)
 
 
 
@@ -1159,6 +1272,82 @@ def get_network_history(
         cursor.execute(query + HISTORY_ORDER_BY, parameters)
         return [history_record(row) for row in cursor.fetchall()]
 
+
+
+@app.get("/api/network-history/retention")
+def get_network_history_retention():
+    with history_database(HISTORY_RETENTION_READ_ERROR) as connection:
+        row = connection.execute(
+            "SELECT retention_days FROM network_history_settings WHERE id = 1"
+        ).fetchone()
+        return {
+            "retention_days": row["retention_days"] if row is not None else None,
+            "max_retention_days": HISTORY_RETENTION_MAX_DAYS,
+        }
+
+
+@app.put("/api/network-history/retention")
+def update_network_history_retention(
+    payload: HistoryRetentionRequest,
+    background_tasks: BackgroundTasks,
+):
+    with history_database(HISTORY_RETENTION_UPDATE_ERROR) as connection:
+        connection.execute(
+            """
+            UPDATE network_history_settings
+            SET retention_days = ?
+            WHERE id = 1
+            """,
+            (payload.retention_days,),
+        )
+        deleted_count = delete_expired_history_batch(
+            connection, payload.retention_days
+        )
+        connection.commit()
+
+    cleanup_scheduled = deleted_count >= HISTORY_RETENTION_BATCH_SIZE
+    if cleanup_scheduled:
+        background_tasks.add_task(cleanup_expired_history)
+
+    return {
+        "status": "success",
+        "retention_days": payload.retention_days,
+        "deleted_count": deleted_count,
+        "cleanup_scheduled": cleanup_scheduled,
+        "message": (
+            "Retention disabled. Existing local history will be kept until it is deleted manually."
+            if payload.retention_days is None
+            else (
+                "Retention updated. Remaining expired records will be cleaned up in the background."
+                if cleanup_scheduled
+                else "Retention updated. Expired local history has been cleaned up."
+            )
+        ),
+    }
+
+
+@app.delete("/api/network-history/selected")
+def delete_selected_network_history(payload: DeleteSelectedHistoryRequest):
+    record_ids = sorted(set(payload.ids))
+    deleted_count = 0
+    with history_database(HISTORY_DELETE_ERROR) as connection:
+        # Keep each statement below SQLite's common host-parameter limit while
+        # using one transaction for the complete selected-record operation.
+        for start in range(0, len(record_ids), 500):
+            batch = record_ids[start : start + 500]
+            placeholders = ",".join("?" for _ in batch)
+            cursor = connection.execute(
+                f"DELETE FROM network_tests WHERE id IN ({placeholders})",
+                batch,
+            )
+            deleted_count += max(cursor.rowcount, 0)
+        connection.commit()
+
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+        "message": f"Deleted {deleted_count} selected local history record(s).",
+    }
 
 
 # ============================================================
@@ -1429,7 +1618,8 @@ def delete_network_history():
 
 
     with history_database(HISTORY_DELETE_ERROR) as connection:
-        connection.execute("DELETE FROM network_tests")
+        cursor = connection.execute("DELETE FROM network_tests")
+        deleted_count = max(cursor.rowcount, 0)
         connection.commit()
 
 
@@ -1440,7 +1630,8 @@ def delete_network_history():
 
         "status": "success",
 
-        "message": "Network history deleted"
+        "message": "Network history deleted",
+        "deleted_count": deleted_count
 
     }
 

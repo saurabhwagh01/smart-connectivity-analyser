@@ -127,6 +127,7 @@ def test_delete_removes_saved_records(client):
     assert deleted.json() == {
         "status": "success",
         "message": "Network history deleted",
+        "deleted_count": 1,
     }
     assert client.get("/api/network-history", params={"range": "all"}).json() == []
 

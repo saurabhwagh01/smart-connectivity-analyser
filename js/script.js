@@ -26,6 +26,7 @@ let lastTestTime = null;
 let downtimeSeconds = 0;
 let currentLocation = null;
 let sessionTests = [];
+let selectedHistoryIds = new Set();
 let savedLocations = [];
 let metricsRestoredFromHistory = false;
 let offlineClearedMetrics = false;
@@ -167,6 +168,7 @@ async function initializeApplication() {
     loadSavedLocations();
 
     await loadNetworkHistory();
+    await loadHistoryRetentionPolicy();
 
     updateDashboard();
     updateApplicationReadiness();
@@ -191,6 +193,40 @@ function setupButtons() {
         "click",
         exportHistoryToCSV
     );
+
+    $("historyRetention")?.addEventListener("change", (event) => {
+        void updateHistoryRetentionPolicy(event.target.value);
+    });
+
+    $("selectAllHistoryRecords")?.addEventListener("change", (event) => {
+        selectedHistoryIds.clear();
+        if (event.target.checked) {
+            sessionTests.forEach((item) => {
+                if (Number.isSafeInteger(item.id) && item.id > 0) {
+                    selectedHistoryIds.add(item.id);
+                }
+            });
+        }
+        renderHistoryRecords(sessionTests);
+    });
+
+    $("historyRecordsList")?.addEventListener("change", (event) => {
+        const checkbox = event.target.closest?.("input[data-history-id]");
+        if (!checkbox) return;
+        const id = Number(checkbox.dataset.historyId);
+        if (!Number.isSafeInteger(id) || id <= 0) return;
+        if (checkbox.checked) selectedHistoryIds.add(id);
+        else selectedHistoryIds.delete(id);
+        updateHistorySelectionControls();
+    });
+
+    $("deleteSelectedHistory")?.addEventListener("click", () => {
+        void deleteSelectedHistoryRecords();
+    });
+
+    $("deleteAllHistory")?.addEventListener("click", () => {
+        void deleteAllNetworkHistory();
+    });
 
     $("historyRange")?.addEventListener("change", (event) => {
         loadNetworkHistory(event.target.value);
@@ -1077,6 +1113,13 @@ function applyHistoryMetricFilter(selectedMetric = "all") {
 
 function normalizeHistoryItem(item = {}) {
     return {
+        id:
+            item.id !== undefined && item.id !== null && Number.isSafeInteger(Number(item.id))
+                ? Number(item.id)
+                : null,
+
+        network_type: item.network_type || item.networkType || "Unknown",
+
         timestamp:
             item.timestamp ||
             item.created_at ||
@@ -1243,6 +1286,248 @@ function setHistoryFilterMessage(message, isError = false) {
 }
 
 
+function setHistoryRetentionMessage(message, isError = false) {
+    const element = $("historyRetentionMessage");
+    if (!element) return;
+    element.textContent = message;
+    element.classList.toggle("is-error", isError);
+}
+
+function updateHistorySelectionControls() {
+    const selectableIds = sessionTests
+        .map((item) => item.id)
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+    const selectedCount = selectableIds.filter((id) => selectedHistoryIds.has(id)).length;
+    const count = $("selectedHistoryCount");
+    const deleteButton = $("deleteSelectedHistory");
+    const selectAll = $("selectAllHistoryRecords");
+
+    if (count) count.textContent = `${selectedCount} selected`;
+    if (deleteButton) deleteButton.disabled = selectedCount === 0;
+    if (selectAll) {
+        selectAll.checked = selectableIds.length > 0 && selectedCount === selectableIds.length;
+        selectAll.indeterminate = selectedCount > 0 && selectedCount < selectableIds.length;
+    }
+}
+
+function renderHistoryRecords(records = sessionTests) {
+    const container = $("historyRecordsList");
+    // Existing Node tests use deliberately small DOM stubs. The selectable
+    // list is optional outside the real page, so skip rendering when the
+    // host does not implement the DOM methods this widget needs.
+    if (
+        !container ||
+        typeof container.replaceChildren !== "function" ||
+        typeof document === "undefined" ||
+        typeof document.createElement !== "function"
+    ) {
+        updateHistorySelectionControls();
+        return;
+    }
+    container.replaceChildren();
+
+    const visibleRecords = (records || []).filter(
+        (item) => Number.isSafeInteger(item.id) && item.id > 0
+    );
+
+    if (!visibleRecords.length) {
+        const empty = document.createElement("p");
+        empty.className = "text-xs text-slate-500 py-2";
+        empty.textContent = "No records in the current history view.";
+        container.appendChild(empty);
+        updateHistorySelectionControls();
+        return;
+    }
+
+    visibleRecords.slice().reverse().forEach((item) => {
+        const row = document.createElement("label");
+        row.className = "flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white/55 px-3 py-2.5 text-xs cursor-pointer hover:bg-white/80";
+
+        const left = document.createElement("span");
+        left.className = "flex items-start gap-2.5 min-w-0";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.dataset.historyId = String(item.id);
+        checkbox.checked = selectedHistoryIds.has(item.id);
+        checkbox.className = "mt-0.5 rounded border-slate-300";
+        checkbox.setAttribute("aria-label", `Select history record ${item.id}`);
+
+        const details = document.createElement("span");
+        details.className = "min-w-0";
+        const time = document.createElement("strong");
+        time.className = "block text-slate-700";
+        time.textContent = new Date(item.timestamp).toLocaleString();
+        const network = document.createElement("span");
+        network.className = "block text-slate-500";
+        network.textContent = item.network_type || "Unknown network";
+        details.append(time, network);
+        left.append(checkbox, details);
+
+        const metrics = document.createElement("span");
+        metrics.className = "font-semibold text-slate-600 sm:text-right";
+        const download = item.download_mbps == null ? "—" : `${Number(item.download_mbps).toFixed(1)} Mbps`;
+        const ping = item.ping == null ? "—" : `${Number(item.ping).toFixed(0)} ms`;
+        const score = item.connectivity_score == null ? "—" : `${Number(item.connectivity_score).toFixed(0)} score`;
+        metrics.textContent = `Down ${download} · Ping ${ping} · ${score}`;
+
+        row.append(left, metrics);
+        container.appendChild(row);
+    });
+
+    updateHistorySelectionControls();
+}
+
+async function readHistoryApiError(response, fallback) {
+    try {
+        const body = await response.json();
+        return body.detail || body.message || fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+async function loadHistoryRetentionPolicy() {
+    const select = $("historyRetention");
+    if (!select) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/network-history/retention`, {
+            method: "GET",
+            cache: "no-store"
+        });
+        if (!response.ok) {
+            throw new Error(await readHistoryApiError(response, `Retention API returned ${response.status}`));
+        }
+        const policy = await response.json();
+        const selectedValue = policy.retention_days == null ? "" : String(policy.retention_days);
+        if (
+            selectedValue !== "" &&
+            !Array.from(select.options).some((option) => option.value === selectedValue)
+        ) {
+            const customOption = document.createElement("option");
+            customOption.value = selectedValue;
+            customOption.textContent = `${selectedValue} days (custom)`;
+            select.appendChild(customOption);
+        }
+        select.value = selectedValue;
+        setHistoryRetentionMessage(
+            policy.retention_days == null
+                ? "History is kept until you delete it."
+                : `Only the most recent ${policy.retention_days} days are retained in local SQLite.`
+        );
+    } catch (error) {
+        setHistoryRetentionMessage(error.message || "Could not load retention settings.", true);
+    }
+}
+
+async function updateHistoryRetentionPolicy(value) {
+    const retentionDays = value === "" ? null : Number(value);
+    if (retentionDays !== null && (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650)) {
+        setHistoryRetentionMessage("Choose a valid retention period.", true);
+        await loadHistoryRetentionPolicy();
+        return;
+    }
+
+    if (retentionDays !== null) {
+        const confirmed = window.confirm(
+            `Keep local network history for ${retentionDays} days? Older records may be permanently deleted from this device's SQLite database. Downloaded exports and external copies are not removed.`
+        );
+        if (!confirmed) {
+            await loadHistoryRetentionPolicy();
+            return;
+        }
+    }
+
+    const select = $("historyRetention");
+    if (select) select.disabled = true;
+    try {
+        const response = await fetch(`${API_BASE}/network-history/retention`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ retention_days: retentionDays })
+        });
+        if (!response.ok) {
+            throw new Error(await readHistoryApiError(response, `Retention update failed (${response.status})`));
+        }
+        const result = await response.json();
+        setHistoryRetentionMessage(
+            result.cleanup_scheduled
+                ? `Retention saved. Removed ${result.deleted_count} expired record(s); more cleanup is scheduled in bounded background batches.`
+                : `Retention saved. Removed ${result.deleted_count} expired local record(s).`
+        );
+        await loadNetworkHistory();
+    } catch (error) {
+        setHistoryRetentionMessage(error.message || "Could not update retention settings.", true);
+        await loadHistoryRetentionPolicy();
+    } finally {
+        if (select) select.disabled = false;
+    }
+}
+
+async function deleteSelectedHistoryRecords() {
+    const ids = Array.from(selectedHistoryIds).filter(
+        (id) => Number.isSafeInteger(id) && id > 0
+    );
+    if (!ids.length) return;
+
+    const confirmed = window.confirm(
+        `Permanently delete ${ids.length} selected record(s) from this device's local SQLite database? This does not delete downloaded CSV exports, backups, or copies sent elsewhere.`
+    );
+    if (!confirmed) return;
+
+    const button = $("deleteSelectedHistory");
+    if (button) button.disabled = true;
+    try {
+        const response = await fetch(`${API_BASE}/network-history/selected`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids })
+        });
+        if (!response.ok) {
+            throw new Error(await readHistoryApiError(response, `Selected deletion failed (${response.status})`));
+        }
+        const result = await response.json();
+        selectedHistoryIds.clear();
+        await loadNetworkHistory();
+        setHistoryFilterMessage(
+            `Deleted ${result.deleted_count} record(s) from local SQLite. Existing exports and external copies are unchanged.`
+        );
+    } catch (error) {
+        setHistoryFilterMessage(error.message || "Could not delete selected history.", true);
+        updateHistorySelectionControls();
+    }
+}
+
+async function deleteAllNetworkHistory() {
+    const confirmed = window.confirm(
+        "Permanently delete all saved network history from this device's local SQLite database? Downloaded CSV exports, backups, and copies sent elsewhere are not deleted."
+    );
+    if (!confirmed) return;
+
+    const button = $("deleteAllHistory");
+    if (button) button.disabled = true;
+    try {
+        const response = await fetch(`${API_BASE}/network-history`, {
+            method: "DELETE"
+        });
+        if (!response.ok) {
+            throw new Error(await readHistoryApiError(response, `History deletion failed (${response.status})`));
+        }
+        const result = await response.json();
+        selectedHistoryIds.clear();
+        await loadNetworkHistory();
+        setHistoryFilterMessage(
+            `Deleted ${result.deleted_count} record(s) from local SQLite. Existing exports and external copies are unchanged.`
+        );
+    } catch (error) {
+        setHistoryFilterMessage(error.message || "Could not delete local history.", true);
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+
 function resetNetworkHistoryFilters() {
     const filterIds = [
         "historyStartDate",
@@ -1350,6 +1635,8 @@ async function loadNetworkHistory(range = null) {
             .filter((item) =>
                 Number.isFinite(Date.parse(item.timestamp))
             );
+        selectedHistoryIds.clear();
+        renderHistoryRecords(sessionTests);
 
         if (sessionTests.length === 0) {
             updateHistoryChart([], "all");
@@ -1424,6 +1711,8 @@ async function loadNetworkHistory(range = null) {
         );
 
         sessionTests = [];
+        selectedHistoryIds.clear();
+        renderHistoryRecords([]);
 
         updateHistoryChart([], "all");
 
@@ -1739,14 +2028,23 @@ async function startNetworkTest() {
             longitude: currentLocation?.longitude ?? null
         };
 
-        sessionTests.push(normalizeHistoryItem(entry));
+        const localHistoryItem = normalizeHistoryItem(entry);
+        sessionTests.push(localHistoryItem);
 
         updateHistoryChart(sessionTests);
         updateSessionStatistics();
 
         // Do not save an empty record when every check failed.
         if (outcome?.state !== "error") {
-            await saveNetworkTest(entry);
+            const savedId = await saveNetworkTest(entry);
+            const localHistoryIndex = sessionTests.indexOf(localHistoryItem);
+            if (savedId !== null && localHistoryIndex >= 0) {
+                sessionTests[localHistoryIndex] = normalizeHistoryItem({
+                    ...entry,
+                    id: savedId
+                });
+                renderHistoryRecords(sessionTests);
+            }
             await loadConnectivityForecast();
         }
 
@@ -3328,20 +3626,26 @@ async function saveNetworkTest(testData) {
         );
 
         if (response.ok) {
+            const saved = await response.json();
+            const savedId = Number(saved.id);
             console.log("Network test saved to backend.");
-            return;
+            return Number.isSafeInteger(savedId) && savedId > 0
+                ? savedId
+                : null;
         }
 
         console.warn(
             "POST /network-test returned:",
             response.status
         );
+        return null;
 
     } catch (error) {
         console.warn(
             "Could not save network test:",
             error.message
         );
+        return null;
     }
 }
 
@@ -3611,6 +3915,9 @@ if (typeof window !== "undefined") {
     window.normalizeHistoryItem =
         normalizeHistoryItem;
 
+    window.renderHistoryRecords =
+        renderHistoryRecords;
+
     window.METRIC_UNITS = METRIC_UNITS;
 
     window.resolveNetworkType =
@@ -3653,6 +3960,8 @@ if (typeof module !== "undefined" && module.exports) {
         formatAnomalyMetric,
         loadNetworkHistory,
         normalizeHistoryItem,
+        renderHistoryRecords,
+        updateHistorySelectionControls,
         applyHistoryMetricFilter,
         smartConnectivity,
         detectLocation,
