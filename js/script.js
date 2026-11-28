@@ -2266,6 +2266,8 @@ function requestNetworkQualityWithProgress(
     return new Promise((resolve, reject) => {
         let settled = false;
         let fallbackStarted = false;
+        let streamResult;
+        let hasStreamResult = false;
         let source;
         const clearActive = () => {
             if (activeDiagnosticEventSource === source) activeDiagnosticEventSource = null;
@@ -2317,9 +2319,22 @@ function requestNetworkQualityWithProgress(
             source.addEventListener("result", (event) => {
                 try {
                     const result = JSON.parse(event.data);
-                    finish(null, result.metrics || result.data || result);
-                } catch (error) {
+                    streamResult = result.metrics || result.data || result;
+                    hasStreamResult = true;
+                } catch (_) {
                     finish(new Error("The diagnostic stream returned an invalid result."));
+                }
+            });
+            source.addEventListener("done", (event) => {
+                try {
+                    const done = JSON.parse(event.data);
+                    if (done.status === "completed" && hasStreamResult) {
+                        finish(null, streamResult);
+                    } else {
+                        finish(new Error("The diagnostic stream ended without a result."));
+                    }
+                } catch (_) {
+                    finish(new Error("The diagnostic stream returned an invalid completion event."));
                 }
             });
             source.addEventListener("failure", (event) => {
@@ -2335,6 +2350,11 @@ function requestNetworkQualityWithProgress(
                 }
             });
             source.onerror = () => {
+                // If the result arrived but the closing event was interrupted, keep that result.
+                if (hasStreamResult) {
+                    finish(null, streamResult);
+                    return;
+                }
                 // A stream that cannot connect or drops mid-run falls back to the legacy JSON endpoint.
                 void fallback();
             };
