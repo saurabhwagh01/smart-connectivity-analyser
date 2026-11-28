@@ -1628,6 +1628,7 @@ async function startNetworkTest() {
         availableNetworkInterfaces
     );
     if (!interfaceSelection.ok) {
+        testInProgress = false;
         setText("testMessage", interfaceSelection.message);
         showToast(interfaceSelection.message);
         return;
@@ -2143,15 +2144,20 @@ function setNetworkInterfaceSelectorDisabled(disabled) {
     if (select) select.disabled = disabled;
 }
 
+function buildNetworkQualityUrl(apiBase, profileId = null, interfaceId = "auto") {
+    const params = new URLSearchParams();
+    if (profileId) params.set("profile", profileId);
+    if (interfaceId && interfaceId !== "auto") params.set("interface", interfaceId);
+    const query = params.toString();
+    const base = apiBase.replace(/\/$/, "");
+    return `${base}/network-quality${query ? `?${query}` : ""}`;
+}
+
 async function runBackendNetworkQualityTest(profileId = null, interfaceId = "auto") {
     lastBackendError = null;
 
     try {
-        const params = new URLSearchParams();
-        if (profileId) params.set("profile", profileId);
-        if (interfaceId && interfaceId !== "auto") params.set("interface", interfaceId);
-        const query = params.toString();
-        const url = `${API_BASE}/network-quality${query ? `?${query}` : ""}`;
+        const url = buildNetworkQualityUrl(API_BASE, profileId, interfaceId);
 
         const response = await fetch(url, {
             method: "GET",
@@ -3777,6 +3783,7 @@ if (typeof module !== "undefined" && module.exports) {
         normalizeNetworkInterfaces,
         resolveNetworkInterfaceSelection,
         loadNetworkInterfaces,
+        buildNetworkQualityUrl,
         runBackendNetworkQualityTest
     };
 }
