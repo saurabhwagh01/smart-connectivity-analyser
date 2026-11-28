@@ -132,7 +132,7 @@ test("EventSource transport failure falls back to the existing JSON endpoint", a
     }
 
     let requestedUrl;
-    const result = await requestNetworkQualityWithProgress("stability", {
+    const resultPromise = requestNetworkQualityWithProgress("stability", {
         EventSourceImpl: FakeEventSource,
         fetchImpl: async (url, options) => {
             requestedUrl = url;
@@ -141,6 +141,7 @@ test("EventSource transport failure falls back to the existing JSON endpoint", a
         }
     });
     instance.onerror();
+    const result = await resultPromise;
 
     assert.deepEqual(result, { ping_ms: 10, packet_loss: 0 });
     assert.equal(instance.closed, true);
