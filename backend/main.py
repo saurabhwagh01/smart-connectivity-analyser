@@ -41,8 +41,6 @@ import sqlite3
 from contextlib import closing, contextmanager
 import json
 import logging
-
-logger = logging.getLogger(__name__)
 import math
 import sys
 
