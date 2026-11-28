@@ -376,6 +376,14 @@
 
   <div id="profileResult" class="profile-result" role="status" aria-live="polite" hidden></div>
 </section>
+<section id="network-interface-section" class="glass-card p-4 md:p-5 space-y-2" aria-labelledby="networkInterfaceHeading" hidden>
+  <h2 id="networkInterfaceHeading" class="text-sm font-semibold text-slate-700">Ping interface</h2>
+  <label for="networkInterfaceSelect" class="sr-only">Choose the interface for ping diagnostics</label>
+  <select id="networkInterfaceSelect" class="w-full sm:max-w-md rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500">
+    <option value="auto">Automatic (System default)</option>
+  </select>
+  <p id="networkInterfaceNote" class="text-xs text-slate-500" role="status">The selected interface applies to the backend IPv4 ping check. Browser-based download and upload checks continue to use the browser's active route.</p>
+</section>
   <!-- CONNECTIVITY SCORE -->
   <section id="main-content" tabindex="-1" class="score-card glass-card p-5 md:p-6 space-y-4" aria-labelledby="scoreHeading">
 
