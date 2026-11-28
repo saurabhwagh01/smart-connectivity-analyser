@@ -157,6 +157,7 @@ async function initializeApplication() {
 
     setupButtons();
     await loadDiagnosticProfiles();
+    await loadNetworkInterfaces();
     setupNetworkListeners();
     detectNetworkType();
     applyConnectivityStatusIndicator();
@@ -1621,6 +1622,17 @@ async function startNetworkTest() {
 
     // NEW: profile selection (null = original standard test)
     const profile = getSelectedProfile();
+    const requestedInterface = $("networkInterfaceSelect")?.value || "auto";
+    const interfaceSelection = resolveNetworkInterfaceSelection(
+        requestedInterface,
+        availableNetworkInterfaces
+    );
+    if (!interfaceSelection.ok) {
+        setText("testMessage", interfaceSelection.message);
+        showToast(interfaceSelection.message);
+        return;
+    }
+    const selectedInterface = interfaceSelection.value;
     const runsBandwidth =
         !profile ||
         profile.checks.includes("download") ||
@@ -1629,6 +1641,7 @@ async function startNetworkTest() {
 
     setStartButtonBusy(button, true);
     setProfileSelectorDisabled(true);
+    setNetworkInterfaceSelectorDisabled(true);
     renderProfileResultLoading(profile);
 
     setText(
@@ -1663,7 +1676,7 @@ async function startNetworkTest() {
 
         const [backendResult, bandwidthResult, protocolResult] =
             await Promise.all([
-                runBackendNetworkQualityTest(profile?.id ?? null),
+                runBackendNetworkQualityTest(profile?.id ?? null, selectedInterface),
                 runsBandwidth
                     ? runCloudflareBandwidthTest()
                     : Promise.resolve(null),
@@ -1763,18 +1776,20 @@ async function startNetworkTest() {
     } catch (error) {
         console.error("Network test failed:", error);
 
-        setText(
-            "testMessage",
-            "Network test failed. Check that the backend server is running and you are connected to the internet, then try again."
-        );
+        const detail = error instanceof Error ? error.message : String(error);
+        const message = selectedInterface !== "auto"
+            ? `Network interface diagnostic failed: ${detail}`
+            : "Network test failed. Check that the backend server is running and you are connected to the internet, then try again.";
+        setText("testMessage", message);
 
-        showToast("Network test failed.");
+        showToast(selectedInterface !== "auto" ? detail : "Network test failed.");
 
     } finally {
         testInProgress = false;
 
         setStartButtonBusy(button, false);
         setProfileSelectorDisabled(false);
+        setNetworkInterfaceSelectorDisabled(false);
 
         if (profile && outcome === null) {
             renderProfileResultStopped();
@@ -2036,27 +2051,116 @@ function describeOutcome(profile, outcome) {
    BACKEND NETWORK QUALITY
    ========================================================= */
 
-async function runBackendNetworkQualityTest(profileId = null) {
+let availableNetworkInterfaces = [{ id: "auto", name: "Automatic (System default)", status: "active", is_default: true }];
+
+function normalizeNetworkInterfaces(data) {
+    if (!data || data.supported !== true || !Array.isArray(data.interfaces)) {
+        return [];
+    }
+
+    const choices = data.interfaces.filter((item) =>
+        item &&
+        typeof item.id === "string" &&
+        typeof item.name === "string" &&
+        (item.id === "auto" || ["connected", "disconnected"].includes(item.status))
+    );
+    const automatic = choices.find((item) => item.id === "auto") || {
+        id: "auto",
+        name: "Automatic (System default)",
+        status: "active",
+        is_default: true
+    };
+    return [
+        automatic,
+        ...choices.filter((item) => item.id !== "auto")
+    ];
+}
+
+function resolveNetworkInterfaceSelection(selectedId, interfaces = availableNetworkInterfaces) {
+    if (!selectedId || selectedId === "auto") {
+        return { ok: true, value: "auto" };
+    }
+
+    const selected = interfaces.find((item) => item.id === selectedId);
+    if (!selected) {
+        return {
+            ok: false,
+            value: "auto",
+            message: "That network interface is no longer available. Refresh the page or choose Automatic (System default)."
+        };
+    }
+    if (selected.status !== "connected") {
+        return {
+            ok: false,
+            value: "auto",
+            message: `Network interface "${selected.name}" is disconnected. Reconnect it or choose Automatic (System default).`
+        };
+    }
+    return { ok: true, value: selected.id };
+}
+
+async function loadNetworkInterfaces(fetchInterfaces = fetch) {
+    const section = $("network-interface-section");
+    const select = $("networkInterfaceSelect");
+    if (!section || !select) return [];
+
+    section.hidden = true;
+    availableNetworkInterfaces = [{ id: "auto", name: "Automatic (System default)", status: "active", is_default: true }];
+
+    try {
+        const response = await fetchInterfaces(`${API_BASE}/network-interfaces`, {
+            method: "GET",
+            cache: "no-store"
+        });
+        if (!response.ok) return [];
+
+        const data = await response.json();
+        availableNetworkInterfaces = normalizeNetworkInterfaces(data);
+        if (availableNetworkInterfaces.length <= 1) return [];
+
+        select.replaceChildren();
+        availableNetworkInterfaces.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = item.id;
+            option.textContent = item.status === "disconnected"
+                ? `${item.name} (Disconnected)`
+                : item.name;
+            option.disabled = item.id !== "auto" && item.status !== "connected";
+            select.append(option);
+        });
+        select.value = "auto";
+        section.hidden = false;
+        return availableNetworkInterfaces;
+    } catch (error) {
+        console.warn("Network interface discovery unavailable:", error.message);
+        availableNetworkInterfaces = [{ id: "auto", name: "Automatic (System default)", status: "active", is_default: true }];
+        return [];
+    }
+}
+
+function setNetworkInterfaceSelectorDisabled(disabled) {
+    const select = $("networkInterfaceSelect");
+    if (select) select.disabled = disabled;
+}
+
+async function runBackendNetworkQualityTest(profileId = null, interfaceId = "auto") {
     lastBackendError = null;
 
     try {
-        const query = profileId
-            ? `?profile=${encodeURIComponent(profileId)}`
-            : "";
+        const params = new URLSearchParams();
+        if (profileId) params.set("profile", profileId);
+        if (interfaceId && interfaceId !== "auto") params.set("interface", interfaceId);
+        const query = params.toString();
+        const url = `${API_BASE}/network-quality${query ? `?${query}` : ""}`;
 
-        const response = await fetch(
-            `${API_BASE}/network-quality${query}`,
-            {
-                method: "GET",
-                cache: "no-store"
-            }
-        );
+        const response = await fetch(url, {
+            method: "GET",
+            cache: "no-store"
+        });
 
         if (!response.ok) {
             lastBackendError = await readApiError(response);
-            throw new Error(
-                `Network quality API returned ${response.status}`
-            );
+            throw new Error(lastBackendError || `Network quality API returned ${response.status}`);
         }
 
         const data = await response.json();
@@ -2072,7 +2176,9 @@ async function runBackendNetworkQualityTest(profileId = null) {
         );
 
         lastBackendError = lastBackendError || error.message;
-
+        if (interfaceId && interfaceId !== "auto") {
+            throw new Error(lastBackendError);
+        }
         return null;
     }
 }
@@ -3667,7 +3773,11 @@ if (typeof module !== "undefined" && module.exports) {
         loadConnectivityForecast,
         renderForecastSection,
         formatProtocolSummary,
-        runNetworkProtocolTest
+        runNetworkProtocolTest,
+        normalizeNetworkInterfaces,
+        resolveNetworkInterfaceSelection,
+        loadNetworkInterfaces,
+        runBackendNetworkQualityTest
     };
 }
 /* =========================================================
