@@ -190,6 +190,33 @@ def test_removed_interface_is_rejected_before_ping_runs(monkeypatch, client):
     assert commands == []
 
 
+def test_interface_removed_while_ping_is_running_returns_clear_error(monkeypatch, client):
+    state = {"discovery_count": 0}
+
+    class MutablePsutil:
+        @staticmethod
+        def net_if_stats():
+            state["discovery_count"] += 1
+            if state["discovery_count"] == 1:
+                return {"eth0": SimpleNamespace(isup=True)}
+            return {}
+
+        @staticmethod
+        def net_if_addrs():
+            if state["discovery_count"] == 1:
+                return {"eth0": [_ipv4("192.168.10.20")]}
+            return {}
+
+    monkeypatch.setattr(main.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(main, "psutil", MutablePsutil)
+    _fake_ping(monkeypatch, "10 packets transmitted, 0 received, 100% packet loss")
+
+    response = client.get("/api/network-quality?interface=eth0")
+
+    assert response.status_code == 400
+    assert "no longer available" in response.json()["detail"]
+
+
 def test_network_interfaces_endpoint_uses_safe_automatic_fallback(monkeypatch, client):
     _install_snapshot(monkeypatch, system="Windows")
 
