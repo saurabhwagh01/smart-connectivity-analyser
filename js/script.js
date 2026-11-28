@@ -76,6 +76,13 @@ const ANOMALY_METRIC_LABELS = Object.freeze({
     packet_loss: "Packet loss"
 });
 
+// Snapshot of the last completed measurements, taken BEFORE any testing
+// state is applied. While a test runs, the dashboard keeps showing these
+// values; on failure they are restored (see restorePreviousMetrics).
+// This must be captured before currentMetrics is reset — snapshotting
+// after the reset would only preserve the null values (PR #66 review).
+let previousMetrics = null;
+
 function setText(id, value) {
     const element = $(id);
     if (element) element.textContent = value;
@@ -274,6 +281,47 @@ function clearLiveMetrics() {
     currentMetrics.score = 0;
     metricsRestoredFromHistory = false;
     offlineClearedMetrics = true;
+}
+
+// ─── Previous-Metrics Snapshot (Issue #59) ─────────────
+
+/**
+ * Save the last completed measurements BEFORE any testing state is
+ * applied. Must be called before currentMetrics is reset in
+ * startNetworkTest(); snapshotting afterwards would only preserve the
+ * null values (the ordering bug flagged in the PR #66 review).
+ */
+function snapshotPreviousMetrics() {
+    previousMetrics = { ...currentMetrics };
+}
+
+/**
+ * Put the snapshotted measurements back into currentMetrics (e.g. after
+ * a failed test or an offline interruption) and clear the snapshot so a
+ * later finally block does not restore them a second time.
+ */
+function restorePreviousMetrics() {
+    if (!previousMetrics) return false;
+
+    currentMetrics = { ...previousMetrics };
+    previousMetrics = null;
+    metricsRestoredFromHistory = false;
+
+    return true;
+}
+
+/**
+ * True when at least one new measurement was produced by the current run.
+ * A run that measured nothing at all is a failed test, not a success.
+ */
+function hasNewMeasurements() {
+    return (
+        currentMetrics.download !== null ||
+        currentMetrics.upload !== null ||
+        currentMetrics.ping !== null ||
+        currentMetrics.jitter !== null ||
+        currentMetrics.packetLoss !== null
+    );
 }
 
 function applyConnectivityStatusIndicator(score = currentMetrics.score) {
@@ -1510,7 +1558,16 @@ function updateChartDescription(items) {
 function abortTestIfOffline() {
     if (!isDeviceOffline()) return false;
 
-    clearLiveMetrics();
+    // An offline interruption mid-test restores the previous results
+    // instead of wiping them. While offline the dashboard still shows
+    // the Offline state; the previous results reappear when the device
+    // is back online.
+    if (testInProgress && previousMetrics) {
+        restorePreviousMetrics();
+    } else {
+        clearLiveMetrics();
+    }
+
     detectNetworkType();
     updateDashboard();
     updateApplicationReadiness();
@@ -1538,6 +1595,11 @@ async function startNetworkTest() {
         return;
     }
 
+    // Snapshot the previous results FIRST, before any testing state is
+    // applied. (PR #66 review: snapshotting after the reset below would
+    // only preserve the null values.)
+    snapshotPreviousMetrics();
+
     testInProgress = true;
     metricsRestoredFromHistory = false;
     offlineClearedMetrics = false;
@@ -1560,7 +1622,7 @@ async function startNetworkTest() {
         "testMessage",
         profile
             ? `Running ${profile.label} (about ${profile.estimated_seconds}s)...`
-            : "Measuring download, upload, ping and jitter..."
+            : "Testing network..."
     );
     setText("dnsStatus", "Checking DNS on the server...");
 
@@ -1633,8 +1695,19 @@ async function startNetworkTest() {
 
         detectNetworkType();
 
+        // No new measurement at all (backend, bandwidth and latency all
+        // unavailable) is a failed test, not a successful one. Throw so
+        // the failure path restores the previous results and reports the
+        // failure instead of showing "Unavailable" everywhere.
+        if (!hasNewMeasurements()) {
+            throw new Error("No network measurements could be completed.");
+        }
+
         currentMetrics.score =
             sharedCalculateConnectivityScore(currentMetrics);
+
+        // Commit: the new results replace the previous ones.
+        previousMetrics = null;
 
         lastTestTime = new Date().toISOString();
 
@@ -1705,12 +1778,20 @@ async function startNetworkTest() {
             renderProfileResultStopped();
         }
 
+        // A run that did not complete successfully still holds its
+        // snapshot: restore the previous results so the dashboard never
+        // shows "Unavailable" for a failed test. On success the snapshot
+        // was already cleared when the new results were committed.
+        if (previousMetrics) {
+            restorePreviousMetrics();
+        }
+
         if (isDeviceOffline()) {
-            clearLiveMetrics();
             updateDashboard();
             updateApplicationReadiness();
             updateNetworkRecommendation();
         } else {
+            updateDashboard();
             updateNetworkStatus();
         }
     }
@@ -2141,11 +2222,9 @@ function applyBackendMetrics(data) {
 
 async function runCloudflareBandwidthTest() {
     try {
-        setText(
-            "testMessage",
-            "Measuring download and upload speed..."
-        );
-
+        // Do not change the test message here: the single
+        // "Testing network..." state set by startNetworkTest covers the
+        // whole run.
         const module = await import(
             "https://cdn.skypack.dev/@cloudflare/speedtest"
         );
@@ -2213,6 +2292,9 @@ async function runCloudflareBandwidthTest() {
                 try {
                     if (isDeviceOffline()) return;
 
+                    // Live partial values go into currentMetrics only;
+                    // they are displayed after the test completes, so the
+                    // dashboard keeps showing the previous results meanwhile.
                     if (type === "download") {
                         const value =
                             test.results?.getDownloadBandwidth?.();
@@ -2220,11 +2302,6 @@ async function runCloudflareBandwidthTest() {
                         if (isValidMetric(value)) {
                             currentMetrics.download =
                                 Number(value) / 1000000;
-
-                            setText(
-                                "download",
-                                currentMetrics.download.toFixed(2)
-                            );
                         }
                     }
 
@@ -2235,11 +2312,6 @@ async function runCloudflareBandwidthTest() {
                         if (isValidMetric(value)) {
                             currentMetrics.upload =
                                 Number(value) / 1000000;
-
-                            setText(
-                                "upload",
-                                currentMetrics.upload.toFixed(2)
-                            );
                         }
                     }
 
@@ -2423,7 +2495,14 @@ function updateDashboard() {
             sharedCalculateConnectivityScore(currentMetrics);
     }
 
-    const display = resolveDashboardDisplayState(currentMetrics, {
+    // While a test is running, keep showing the previous results instead
+    // of the in-progress (empty) metrics, so the dashboard never flashes
+    // "Unavailable" for an ongoing test. New values are only displayed
+    // once the test completes (testInProgress becomes false).
+    const displayMetrics =
+        testInProgress && previousMetrics ? previousMetrics : currentMetrics;
+
+    const display = resolveDashboardDisplayState(displayMetrics, {
         isOffline: offline,
         isTesting: testInProgress,
         isHistoryRestored: metricsRestoredFromHistory
